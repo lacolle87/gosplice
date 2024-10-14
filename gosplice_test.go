@@ -1,4 +1,4 @@
-package goslice
+package gosplice
 
 import (
 	"strings"

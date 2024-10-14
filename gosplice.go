@@ -1,4 +1,4 @@
-package goslice
+package gosplice
 
 // Map applies a function to each element of the slice and returns a new slice.
 func Map[T any, U any](slice []T, f func(T) U) []U {
