@@ -126,6 +126,14 @@ func Reverse[T any](slice []T) []T
 
 Reverses the elements of the slice in place.
 
+### 15. Unique
+
+```go
+func Unique[T comparable](slice []T) []T
+```
+
+Returns a new slice containing only unique elements from the input slice, preserving their original order.
+
 ## Usage Example
 
 Below is an examples of how to use some of the functions in the `gosplice` package:

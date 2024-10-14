@@ -133,3 +133,17 @@ func Reverse[T any](slice []T) []T {
 	}
 	return slice
 }
+
+// Unique returns a new slice with unique elements, preserving the order.
+func Unique[T comparable](slice []T) []T {
+	unique := make(map[T]struct{})
+	var result []T
+
+	for _, v := range slice {
+		if _, exists := unique[v]; !exists {
+			unique[v] = struct{}{}
+			result = append(result, v)
+		}
+	}
+	return result
+}

@@ -307,3 +307,17 @@ func TestReverse(t *testing.T) {
 	strResult = Reverse(strInput)
 	assert.Equal(t, strExpected, strResult)
 }
+
+func TestUnique(t *testing.T) {
+	// Test with integers
+	intInput := []int{1, 2, 2, 3, 4, 4, 5}
+	intExpected := []int{1, 2, 3, 4, 5}
+	intResult := Unique(intInput)
+	assert.Equal(t, intExpected, intResult)
+
+	// Test with strings
+	stringInput := []string{"Alice", "Bob", "Alice", "Charlie", "Bob"}
+	stringExpected := []string{"Alice", "Bob", "Charlie"}
+	stringResult := Unique(stringInput)
+	assert.Equal(t, stringExpected, stringResult)
+}
