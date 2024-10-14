@@ -147,3 +147,36 @@ func Unique[T comparable](slice []T) []T {
 	}
 	return result
 }
+
+// Chunk divides a slice into smaller slices of the specified size.
+func Chunk[T any](slice []T, size int) [][]T {
+	if size <= 0 {
+		return nil
+	}
+
+	var chunks [][]T
+	for i := 0; i < len(slice); i += size {
+		end := i + size
+		if end > len(slice) {
+			end = len(slice)
+		}
+		chunks = append(chunks, slice[i:end])
+	}
+	return chunks
+}
+
+// Remove removes elements from the first slice based on the values in the second slice.
+func Remove[T comparable](slice []T, remove []T) []T {
+	removeMap := make(map[T]struct{})
+	for _, v := range remove {
+		removeMap[v] = struct{}{}
+	}
+
+	var result []T
+	for _, v := range slice {
+		if _, exists := removeMap[v]; !exists {
+			result = append(result, v)
+		}
+	}
+	return result
+}

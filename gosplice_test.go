@@ -321,3 +321,110 @@ func TestUnique(t *testing.T) {
 	stringResult := Unique(stringInput)
 	assert.Equal(t, stringExpected, stringResult)
 }
+
+// TestChunk tests the Chunk function.
+func TestChunk(t *testing.T) {
+	var emptyInput []int
+	tests := []struct {
+		name     string
+		input    []int
+		size     int
+		expected [][]int
+	}{
+		{
+			name:     "Standard chunking",
+			input:    []int{1, 2, 3, 4, 5, 6, 7, 8, 9},
+			size:     3,
+			expected: [][]int{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}},
+		},
+		{
+			name:     "Chunk size larger than input",
+			input:    []int{1, 2},
+			size:     5,
+			expected: [][]int{{1, 2}},
+		},
+		{
+			name:     "Empty input slice",
+			input:    emptyInput,
+			size:     2,
+			expected: [][]int(nil),
+		},
+		{
+			name:     "Chunk size of 0",
+			input:    []int{1, 2, 3, 4, 5},
+			size:     0,
+			expected: nil, // Expecting nil since size is 0
+		},
+		{
+			name:     "Chunk size of 1",
+			input:    []int{1, 2, 3},
+			size:     1,
+			expected: [][]int{{1}, {2}, {3}},
+		},
+		{
+			name:     "Chunk size of 2",
+			input:    []int{1, 2, 3, 4, 5},
+			size:     2,
+			expected: [][]int{{1, 2}, {3, 4}, {5}},
+		},
+		{
+			name:     "Single element chunk",
+			input:    []int{1},
+			size:     1,
+			expected: [][]int{{1}},
+		},
+		{
+			name:     "Multiple empty slices",
+			input:    []int{1, 2, 3, 4},
+			size:     2,
+			expected: [][]int{{1, 2}, {3, 4}},
+		},
+		{
+			name:     "Edge case: single large chunk",
+			input:    []int{1, 2, 3},
+			size:     4,
+			expected: [][]int{{1, 2, 3}}, // Expect one chunk with all elements
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Chunk(tt.input, tt.size)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestRemove(t *testing.T) {
+	// Test case: Remove elements from integer slice
+	input := []int{1, 2, 3, 4, 5}
+	toRemove := []int{2, 4}
+	expected := []int{1, 3, 5}
+	result := Remove(input, toRemove)
+	assert.Equal(t, expected, result)
+
+	// Test case: Remove elements from string slice
+	input2 := []string{"apple", "banana", "cherry", "date"}
+	toRemove2 := []string{"banana", "date"}
+	expected2 := []string{"apple", "cherry"}
+	result2 := Remove(input2, toRemove2)
+	assert.Equal(t, expected2, result2)
+
+	// Test case: Remove all elements
+	toRemove3 := []int{1, 2, 3, 4, 5}
+	var expected3 []int
+	result3 := Remove(input, toRemove3)
+	assert.Equal(t, expected3, result3)
+
+	// Test case: Remove no elements
+	var toRemove4 []int
+	expected4 := []int{1, 2, 3, 4, 5}
+	result4 := Remove(input, toRemove4)
+	assert.Equal(t, expected4, result4)
+
+	// Test case: Original slice empty
+	var input5 []int
+	var expected5 []int
+	result5 := Remove(input5, toRemove)
+	assert.Equal(t, expected5, result5)
+}

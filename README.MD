@@ -134,6 +134,23 @@ func Unique[T comparable](slice []T) []T
 
 Returns a new slice containing only unique elements from the input slice, preserving their original order.
 
+
+### 16. Chunk
+
+```go
+func Chunk[T any](slice []T, size int) [][]T
+```
+
+Divides a slice into smaller slices (chunks) of the specified size. If the input slice cannot be evenly divided, the last chunk will contain the remaining elements.
+
+### 17. Remove
+
+```go
+func Remove[T comparable](slice []T, remove []T) []T
+```
+
+Returns a new slice with elements from the input `slice` that do not exist in the `remove` slice. This function allows for efficient removal of specified elements while preserving the original order of the remaining elements.
+
 ## Usage Example
 
 Below is an examples of how to use some of the functions in the `gosplice` package:
