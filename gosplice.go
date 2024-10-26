@@ -3,8 +3,8 @@ package gosplice
 // Map applies a function to each element of the slice and returns a new slice.
 func Map[T any, U any](slice []T, f func(T) U) []U {
 	result := make([]U, len(slice))
-	for i, v := range slice {
-		result[i] = f(v)
+	for i := range slice {
+		result[i] = f(slice[i])
 	}
 	return result
 }
@@ -167,12 +167,21 @@ func Chunk[T any](slice []T, size int) [][]T {
 
 // Remove removes elements from the first slice based on the values in the second slice.
 func Remove[T comparable](slice []T, remove []T) []T {
-	removeMap := make(map[T]struct{})
+	removeMap := make(map[T]struct{}, len(remove))
 	for _, v := range remove {
 		removeMap[v] = struct{}{}
 	}
 
-	var result []T
+	if len(slice) == 0 {
+		return []T{}
+	}
+
+	capacity := len(slice) - len(remove)
+	if capacity < 0 {
+		capacity = 0
+	}
+	result := make([]T, 0, capacity)
+
 	for _, v := range slice {
 		if _, exists := removeMap[v]; !exists {
 			result = append(result, v)

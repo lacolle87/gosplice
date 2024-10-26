@@ -412,7 +412,7 @@ func TestRemove(t *testing.T) {
 
 	// Test case: Remove all elements
 	toRemove3 := []int{1, 2, 3, 4, 5}
-	var expected3 []int
+	expected3 := make([]int, 0)
 	result3 := Remove(input, toRemove3)
 	assert.Equal(t, expected3, result3)
 
@@ -424,7 +424,7 @@ func TestRemove(t *testing.T) {
 
 	// Test case: Original slice empty
 	var input5 []int
-	var expected5 []int
+	expected5 := make([]int, 0)
 	result5 := Remove(input5, toRemove)
 	assert.Equal(t, expected5, result5)
 }
