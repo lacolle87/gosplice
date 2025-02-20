@@ -142,31 +142,29 @@ func Reverse[T any](slice []T) []T {
 
 // Unique returns a new slice with unique elements, preserving the order.
 func Unique[T comparable](slice []T) []T {
-	n := len(slice)
-	if n < 2 {
-		return slice
+	if len(slice) < 2 {
+		return append([]T{}, slice...)
 	}
 
-	unique := make(map[T]struct{}, n)
-	writeIdx := 0
+	unique := make(map[T]struct{}, len(slice))
+	result := make([]T, 0, len(slice))
 
 	for _, v := range slice {
 		if _, exists := unique[v]; !exists {
 			unique[v] = struct{}{}
-			slice[writeIdx] = v
-			writeIdx++
+			result = append(result, v)
 		}
 	}
-	return slice[:writeIdx]
+	return result
 }
 
 // Chunk divides a slice into smaller slices of the specified size.
 func Chunk[T any](slice []T, size int) [][]T {
-	if size <= 0 {
+	if size <= 0 || len(slice) == 0 {
 		return nil
 	}
 
-	var chunks [][]T
+	chunks := make([][]T, 0, (len(slice)+size-1)/size)
 	for i := 0; i < len(slice); i += size {
 		end := i + size
 		if end > len(slice) {
