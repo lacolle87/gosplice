@@ -127,11 +127,12 @@ func FlatMap[T any, U any](slice []T, f func(T) []U) []U {
 
 // Reverse reverses the elements of the slice.
 func Reverse[T any](slice []T) []T {
-	for i := len(slice)/2 - 1; i >= 0; i-- {
-		opp := len(slice) - 1 - i
-		slice[i], slice[opp] = slice[opp], slice[i]
+	n := len(slice)
+	res := make([]T, n)
+	for i, v := range slice {
+		res[n-1-i] = v
 	}
-	return slice
+	return res
 }
 
 // Unique returns a new slice with unique elements, preserving the order.
