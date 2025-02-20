@@ -4,7 +4,7 @@
 
 ## Installation
 
-This project requires Go version 1.23.2. Ensure you have it installed before running the project.
+This project requires Go version 1.23+. Ensure you have it installed before running the project.
 
 To install `gosplice`, use the following command:
 

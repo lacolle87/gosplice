@@ -109,7 +109,12 @@ func LastIndexOf[T comparable](slice []T, value T) int {
 
 // Flat flattens a 2D slice into a 1D slice.
 func Flat[T any](slice [][]T) []T {
-	var result []T
+	total := 0
+	for _, v := range slice {
+		total += len(v)
+	}
+
+	result := make([]T, 0, total)
 	for _, v := range slice {
 		result = append(result, v...)
 	}
