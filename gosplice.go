@@ -179,21 +179,25 @@ func Chunk[T any](slice []T, size int) [][]T {
 
 // Remove removes elements from the first slice based on the values in the second slice.
 func Remove[T comparable](slice []T, remove []T) []T {
-	if len(slice) == 0 || len(remove) == 0 {
-		return slice
-	}
-
-	removeSet := make(map[T]struct{}, len(remove))
+	removeMap := make(map[T]struct{}, len(remove))
 	for _, v := range remove {
-		removeSet[v] = struct{}{}
+		removeMap[v] = struct{}{}
 	}
 
-	writeIdx := 0
+	if len(slice) == 0 {
+		return []T{}
+	}
+
+	capacity := len(slice) - len(remove)
+	if capacity < 0 {
+		capacity = 0
+	}
+	result := make([]T, 0, capacity)
+
 	for _, v := range slice {
-		if _, found := removeSet[v]; !found {
-			slice[writeIdx] = v
-			writeIdx++
+		if _, exists := removeMap[v]; !exists {
+			result = append(result, v)
 		}
 	}
-	return slice[:writeIdx]
+	return result
 }
