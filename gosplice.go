@@ -142,16 +142,22 @@ func Reverse[T any](slice []T) []T {
 
 // Unique returns a new slice with unique elements, preserving the order.
 func Unique[T comparable](slice []T) []T {
-	unique := make(map[T]struct{})
-	var result []T
+	n := len(slice)
+	if n < 2 {
+		return slice
+	}
+
+	unique := make(map[T]struct{}, n)
+	writeIdx := 0
 
 	for _, v := range slice {
 		if _, exists := unique[v]; !exists {
 			unique[v] = struct{}{}
-			result = append(result, v)
+			slice[writeIdx] = v
+			writeIdx++
 		}
 	}
-	return result
+	return slice[:writeIdx]
 }
 
 // Chunk divides a slice into smaller slices of the specified size.
@@ -173,25 +179,21 @@ func Chunk[T any](slice []T, size int) [][]T {
 
 // Remove removes elements from the first slice based on the values in the second slice.
 func Remove[T comparable](slice []T, remove []T) []T {
-	removeMap := make(map[T]struct{}, len(remove))
+	if len(slice) == 0 || len(remove) == 0 {
+		return slice
+	}
+
+	removeSet := make(map[T]struct{}, len(remove))
 	for _, v := range remove {
-		removeMap[v] = struct{}{}
+		removeSet[v] = struct{}{}
 	}
 
-	if len(slice) == 0 {
-		return []T{}
-	}
-
-	capacity := len(slice) - len(remove)
-	if capacity < 0 {
-		capacity = 0
-	}
-	result := make([]T, 0, capacity)
-
+	writeIdx := 0
 	for _, v := range slice {
-		if _, exists := removeMap[v]; !exists {
-			result = append(result, v)
+		if _, found := removeSet[v]; !found {
+			slice[writeIdx] = v
+			writeIdx++
 		}
 	}
-	return result
+	return slice[:writeIdx]
 }
