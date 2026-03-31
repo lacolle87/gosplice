@@ -1,8 +1,6 @@
 package gosplice
 
-import (
-	"testing"
-)
+import "testing"
 
 func BenchmarkMap(b *testing.B) {
 	slice := make([]int, 1000)
@@ -15,6 +13,17 @@ func BenchmarkMap(b *testing.B) {
 	}
 }
 
+func BenchmarkMapInPlace(b *testing.B) {
+	slice := make([]int, 1000)
+	for i := range slice {
+		slice[i] = i
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		MapInPlace(slice, func(x int) int { return x * 2 })
+	}
+}
+
 func BenchmarkReduce(b *testing.B) {
 	slice := make([]int, 1000)
 	for i := range slice {
@@ -22,7 +31,7 @@ func BenchmarkReduce(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		Reduce(slice, func(a, b int) int { return a + b }, 0)
+		Reduce(slice, 0, func(a, b int) int { return a + b })
 	}
 }
 
@@ -34,6 +43,19 @@ func BenchmarkFilter(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		Filter(slice, func(x int) bool { return x%2 == 0 })
+	}
+}
+
+func BenchmarkFilterInPlace(b *testing.B) {
+	orig := make([]int, 1000)
+	for i := range orig {
+		orig[i] = i
+	}
+	buf := make([]int, 1000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		copy(buf, orig)
+		FilterInPlace(buf, func(x int) bool { return x%2 == 0 })
 	}
 }
 
@@ -161,10 +183,21 @@ func BenchmarkReverse(b *testing.B) {
 	}
 }
 
+func BenchmarkReverseInPlace(b *testing.B) {
+	slice := make([]int, 1000)
+	for i := range slice {
+		slice[i] = i
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ReverseInPlace(slice)
+	}
+}
+
 func BenchmarkUnique(b *testing.B) {
 	slice := make([]int, 1000)
 	for i := 0; i < len(slice); i++ {
-		slice[i] = i % 100 // Add some duplicates
+		slice[i] = i % 100
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -192,5 +225,50 @@ func BenchmarkRemove(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		Remove(slice, remove)
+	}
+}
+
+func BenchmarkRemoveSmall(b *testing.B) {
+	slice := make([]int, 1000)
+	for i := range slice {
+		slice[i] = i
+	}
+
+	b.Run("remove_3", func(b *testing.B) {
+		rm := []int{100, 500, 900}
+		for i := 0; i < b.N; i++ {
+			Remove(slice, rm)
+		}
+	})
+
+	b.Run("remove_16", func(b *testing.B) {
+		rm := make([]int, 16)
+		for i := range rm {
+			rm[i] = i * 60
+		}
+		for i := 0; i < b.N; i++ {
+			Remove(slice, rm)
+		}
+	})
+
+	b.Run("remove_32", func(b *testing.B) {
+		rm := make([]int, 32)
+		for i := range rm {
+			rm[i] = i * 30
+		}
+		for i := 0; i < b.N; i++ {
+			Remove(slice, rm)
+		}
+	})
+}
+
+func BenchmarkCount(b *testing.B) {
+	slice := make([]int, 1000)
+	for i := range slice {
+		slice[i] = i
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Count(slice, func(x int) bool { return x%2 == 0 })
 	}
 }

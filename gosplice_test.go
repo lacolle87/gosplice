@@ -39,9 +39,9 @@ func TestReduce(t *testing.T) {
 	// Test case for summing integers
 	input := []int{1, 2, 3}
 	expected := 6 // 1 + 2 + 3
-	result := Reduce(input, func(acc int, n int) int {
+	result := Reduce(input, 0, func(acc int, n int) int {
 		return acc + n
-	}, 0)
+	})
 	assert.Equal(t, expected, result)
 }
 

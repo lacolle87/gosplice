@@ -1,266 +1,205 @@
 # GoSplice
 
-`gosplice` is a Go package inspired by popular JavaScript libraries for arrays, providing a variety of utility functions to manipulate slices using generics. This package allows developers to work with slices in a more functional and expressive manner, similar to array methods available in JS.
+A high-performance, lazy, composable ETL pipeline framework for Go with generics.
+
+GoSplice provides streaming pipelines that handle millions of elements with minimal allocations, configurable parallelism, batching, hooks, and aggregation — all with type-safe generics.
 
 ## Installation
 
-This project requires Go version 1.23+. Ensure you have it installed before running the project.
-
-To install `gosplice`, use the following command:
+Requires Go 1.23+.
 
 ```bash
 go get github.com/lacolle87/gosplice
 ```
 
-## Functions
-
-### 1. Map
-
-```go
-func Map[T any, U any](slice []T, f func(T) U) []U
-```
-
-Applies a function to each element of the slice and returns a new slice containing the results.
-
-### 2. Reduce
-
-```go
-func Reduce[T any](slice []T, f func(T, T) T, initial T) T
-```
-
-Reduces the slice to a single value using a specified function and an initial value.
-
-### 3. Filter
-
-```go
-func Filter[T any](slice []T, f func(T) bool) []T
-```
-
-Filters elements of the slice based on a predicate function, returning a new slice with only the elements that satisfy the condition.
-
-### 4. Some
-
-```go
-func Some[T any](slice []T, predicate func(T) bool) bool
-```
-
-Checks if any element in the slice satisfies the given predicate function.
-
-### 5. Every
-
-```go
-func Every[T any](slice []T, f func(T) bool) bool
-```
-
-Returns `true` if all elements in the slice satisfy the specified function; otherwise, returns `false`.
-
-### 6. Find
-
-```go
-func Find[T any](slice []T, f func(T) bool) (T, bool)
-```
-
-Returns the first element that satisfies the predicate function, along with a boolean indicating success.
-
-### 7. FindIndex
-
-```go
-func FindIndex[T any](slice []T, f func(T) bool) int
-```
-
-Returns the index of the first element that satisfies the predicate function, or `-1` if none found.
-
-### 8. ForEach
-
-```go
-func ForEach[T any](slice []T, f func(T))
-```
-
-Applies a function to each element of the slice, performing side effects.
-
-### 9. Includes
-
-```go
-func Includes[T comparable](slice []T, value T) bool
-```
-
-Returns `true` if the value exists in the slice; otherwise, returns `false`.
-
-### 10. IndexOf
-
-```go
-func IndexOf[T comparable](slice []T, value T) int
-```
-
-Returns the index of the first occurrence of the value, or `-1` if not found.
-
-### 11. LastIndexOf
-
-```go
-func LastIndexOf[T comparable](slice []T, value T) int
-```
-
-Returns the index of the last occurrence of the value, or `-1` if not found.
-
-### 12. Flat
-
-```go
-func Flat[T any](slice [][]T) []T
-```
-
-Flattens a 2D slice into a 1D slice.
-
-### 13. FlatMap
-
-```go
-func FlatMap[T any, U any](slice []T, f func(T) []U) []U
-```
-
-Applies a function to each element and flattens the result into a single slice.
-
-### 14. Reverse
-
-```go
-func Reverse[T any](slice []T) []T
-```
-
-Reverses the elements of the slice in place.
-
-### 15. Unique
-
-```go
-func Unique[T comparable](slice []T) []T
-```
-
-Returns a new slice containing only unique elements from the input slice, preserving their original order.
-
-
-### 16. Chunk
-
-```go
-func Chunk[T any](slice []T, size int) [][]T
-```
-
-Divides a slice into smaller slices (chunks) of the specified size. If the input slice cannot be evenly divided, the last chunk will contain the remaining elements.
-
-### 17. Remove
-
-```go
-func Remove[T comparable](slice []T, remove []T) []T
-```
-
-Returns a new slice with elements from the input `slice` that do not exist in the `remove` slice. This function allows for efficient removal of specified elements while preserving the original order of the remaining elements.
-
-## Usage Example
-
-Below is an examples of how to use some of the functions in the `gosplice` package:
+## Quick Start
 
 ```go
 package main
 
 import (
-	"fmt"
-	"github.com/lacolle87/gosplice"
+    "fmt"
+    "strings"
+    gs "github.com/lacolle87/gosplice"
 )
 
+type User struct {
+    Name   string
+    Score  int
+    Active bool
+}
+
 func main() {
-	// Example with integers
-	nums := []int{1, 2, 3, 4, 5}
+    users := []User{
+        {"Alice", 85, true},
+        {"Bob", 42, false},
+        {"Charlie", 91, true},
+        {"Diana", 67, true},
+        {"Eve", 78, true},
+    }
 
-	// Map: square each number
-	squared := gosplice.Map(nums, func(n int) int {
-		return n * n
-	})
-	fmt.Println("Squared:", squared) // Output: Squared: [1 4 9 16 25]
+    // Lazy pipeline: nothing executes until Collect()
+    names := gs.PipeMap(
+        gs.FromSlice(users).
+            Filter(func(u User) bool { return u.Active }).
+            Filter(func(u User) bool { return u.Score >= 70 }),
+        func(u User) string { return strings.ToUpper(u.Name) },
+    ).Collect()
 
-	// Reduce: sum all numbers
-	sum := gosplice.Reduce(nums, func(a, b int) int {
-		return a + b
-	}, 0)
-	fmt.Println("Sum:", sum) // Output: Sum: 15
-
-	// Filter: get even numbers
-	even := gosplice.Filter(nums, func(n int) bool {
-		return n%2 == 0
-	})
-	fmt.Println("Even numbers:", even) // Output: Even numbers: [2 4]
-
-	// Some: check if any number is greater than 3
-	hasGreaterThanThree := gosplice.Some(nums, func(n int) bool {
-		return n > 3
-	})
-	fmt.Println("Any number greater than 3:", hasGreaterThanThree) // Output: true
-
-	// Every: check if all numbers are positive
-	allPositive := gosplice.Every(nums, func(n int) bool {
-		return n > 0
-	})
-	fmt.Println("All numbers positive:", allPositive) // Output: true
+    fmt.Println(names) // [ALICE CHARLIE EVE]
 }
 ```
 
+## Architecture
+
+### Sources
+
+Pipelines begin with a source adapter. All sources implement a pull-based iterator internally, enabling lazy one-pass evaluation.
+
+| Factory | Description |
+|---|---|
+| `FromSlice[T]([]T)` | In-memory slice |
+| `FromChannel[T](<-chan T)` | Go channel (streaming) |
+| `FromReader(io.Reader)` | Line-by-line text reader |
+| `FromFunc[T](func() (T, bool))` | Custom generator |
+| `FromRange(start, end int)` | Integer range |
+
+### Pipeline Operations
+
+**Same-type methods** (chainable on `*Pipeline[T]`):
+
+- `Filter(func(T) bool)` — lazy predicate filter
+- `Take(n int)` — limit to first n elements
+- `Skip(n int)` — skip first n elements
+- `Peek(func(T))` — side-effect without consuming
+
+**Type-changing free functions** (Go generics require these as top-level functions):
+
+- `PipeMap[T, U](p, func(T) U)` — transform elements
+- `PipeMapErr[T, U](p, func(T) (U, error))` — transform with error handling
+- `PipeFlatMap[T, U](p, func(T) []U)` — map + flatten
+- `PipeDistinct[T comparable](p)` — deduplicate
+- `PipeChunk[T](p, size)` — group into fixed-size batches
+- `PipeWindow[T](p, size, step)` — sliding window
+
+### Terminal Operations
+
+Terminals trigger lazy evaluation:
+
+- `Collect() []T` — gather all results
+- `CollectTo(dst []T) []T` — reuse existing buffer
+- `Reduce(func(T,T) T, initial T) T` — fold
+- `ForEach(func(T))` — side-effect iteration
+- `WriteTo(func(T))` — output to external system
+- `Count() int` — element count
+- `First() (T, bool)` — first matching element
+- `Any(func(T) bool) bool` — short-circuit existence check
+- `All(func(T) bool) bool` — short-circuit universal check
+
+### Aggregation
+
+Free functions for keyed aggregation:
+
 ```go
-package main
+groups := gs.GroupBy(pipeline, func(u User) string { return u.Department })
+counts := gs.CountBy(pipeline, func(u User) string { return u.Role })
+total  := gs.SumBy(pipeline, func(u User) float64 { return u.Salary })
+top, _ := gs.MaxBy(pipeline, func(u User) int { return u.Score })
+low, _ := gs.MinBy(pipeline, func(u User) int { return u.Score })
+matched, unmatched := gs.Partition(pipeline, func(u User) bool { return u.Active })
+```
 
-import (
-	"fmt"
-	"github.com/lacolle87/gosplice"
-	"strings"
-)
+### Parallel Operations
 
-func main() {
-	// Example with strings
-	names := []string{"Alice", "Bob", "Charlie", "John Doe"}
+Order-preserving parallel execution with configurable worker pools:
 
-	// Original name
-	name := "John Doe"
+```go
+// Parallel map — results maintain input order
+result := gs.PipeMapParallel(pipeline, 8, expensiveTransform).Collect()
 
-	// Transform the name to initials in one line
-	initials := strings.Join(gosplice.Map(strings.Split(name, " "), func(part string) string {
-		return strings.ToUpper(part[:1]) // Return the uppercase initial
-	}), ". ") + "."
+// Parallel filter
+result := gs.PipeFilterParallel(pipeline, 4, expensivePredicate).Collect()
 
-	// Output the initials
-	fmt.Println("Initials:", initials) // Output: Initials: J. D.
+// Parallel map with error handling
+result := gs.PipeMapParallelErr(pipeline, 4, func(r Record) (Output, error) {
+    return process(r)
+}).Collect()
 
-	// Find: Get the first name that starts with 'C'
-	foundName, found := gosplice.Find(names, func(name string) bool {
-		return strings.HasPrefix(name, "C")
-	})
-	if found {
-		fmt.Println("Found name starting with 'C':", foundName) // Output: Found name starting with 'C': Charlie
-	}
+// Unordered parallel (higher throughput, no ordering guarantee)
+result := gs.PipeMapParallelUnordered(pipeline, 8, transform).Collect()
 
-	// ForEach: Print each name
-	gosplice.ForEach(names, func(name string) {
-		fmt.Println("Name:", name)
-	})
+// Streaming parallel for channels/readers (order-preserving, bounded memory)
+result := gs.PipeMapParallelStream(pipeline, 4, 256, transform).Collect()
+```
 
-	// Includes: Check if 'Alice' is in the list
-	includesAlice := gosplice.Includes(names, "Alice")
-	fmt.Println("Includes Alice:", includesAlice) // Output: true
-}
+### Batching
+
+Configurable batching with size and optional timeout for streaming sources:
+
+```go
+// Fixed-size batches
+batches := gs.PipeBatch(pipeline, gs.BatchConfig{Size: 100}).Collect()
+
+// With timeout for streaming — emit partial batch if timeout expires
+batches := gs.PipeBatch(channelPipeline, gs.BatchConfig{
+    Size:    100,
+    MaxWait: 500 * time.Millisecond,
+})
+```
+
+### Hooks
+
+Non-blocking, composable hooks for observability without modifying core logic:
+
+```go
+pipeline := gs.FromSlice(data).
+    WithElementHook(func(r Record) {
+        metrics.Inc("records.processed")
+    }).
+    WithErrorHook(func(err error, r Record) {
+        log.Printf("error processing %v: %v", r.ID, err)
+    }).
+    WithBatchHook(func(batch []Record) {
+        db.BulkInsert(batch)
+    }).
+    WithCompletionHook(func() {
+        log.Println("pipeline complete")
+    }).
+    WithTimeout(30 * time.Second)
+```
+
+Multiple hooks of the same type compose — they fire in registration order.
+
+## Design Decisions
+
+**Why free functions for Map/FlatMap?** Go generics don't support method-level type parameters different from the receiver's. `Pipeline[T].Map(func(T) U) Pipeline[U]` is impossible as a method. Free functions like `PipeMap[T, U]` are the idiomatic solution and provide full type safety without `interface{}`.
+
+**Why pull-based iteration?** Push-based (channel per stage) creates goroutine overhead. Pull-based `Next() (T, bool)` keeps everything on one goroutine until you explicitly opt into parallelism.
+
+**Why keep standalone functions?** The `Map`, `Filter`, `Reduce` etc. standalone functions in `slice.go` remain for simple slice operations where a full pipeline is overkill.
+
+## Standalone Slice Utilities
+
+For cases where a pipeline is unnecessary:
+
+```go
+doubled := gs.Map(nums, func(n int) int { return n * 2 })
+evens := gs.Filter(nums, func(n int) bool { return n%2 == 0 })
+sum := gs.Reduce(nums, func(a, b int) int { return a + b }, 0)
+unique := gs.Unique(nums)
+chunks := gs.Chunk(nums, 10)
+reversed := gs.Reverse(nums)
+// ... and more
 ```
 
 ## Testing
 
-To see how to use the functions, refer to the tests in the `gosplice` package. The tests demonstrate various use cases for each function.
-
-### Running Tests
-
-You can run the tests using:
-
 ```bash
-go test -v
+go test -v                        # Unit tests
+go test -bench=. -benchmem        # Benchmarks
+go test -race ./...               # Race detection
 ```
-
-## Generics
-
-The `gosplice` package utilizes Go's generics feature, allowing you to work with any data type seamlessly.
-
-## Contributions
-Contributions are welcome! You can fork the repository, open issues, or submit pull requests. Please ensure your contributions align with the project's goals and coding standards.
 
 ## License
 
-This project is licensed under the MIT License.
+MIT License — see [LICENSE](LICENSE).
