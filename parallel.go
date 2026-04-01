@@ -2,11 +2,6 @@ package gosplice
 
 import "sync"
 
-type indexedItem[T any] struct {
-	idx int
-	val T
-}
-
 func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *Pipeline[U] {
 	items := drainSource(p.source)
 	n := len(items)
@@ -94,12 +89,8 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 		return FromSlice([]U{})
 	}
 
-	type mapResult struct {
-		val U
-		err error
-	}
-
-	results := make([]mapResult, n)
+	vals := make([]U, n)
+	errs := make([]error, n)
 	var wg sync.WaitGroup
 	batchSize := (n + workers - 1) / workers
 
@@ -116,56 +107,22 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 		go func(lo, hi int) {
 			defer wg.Done()
 			for i := lo; i < hi; i++ {
-				val, err := fn(items[i])
-				results[i] = mapResult{val: val, err: err}
+				vals[i], errs[i] = fn(items[i])
 			}
 		}(start, end)
 	}
 	wg.Wait()
 
 	out := make([]U, 0, n)
-	for i, r := range results {
-		if r.err != nil {
-			p.hooks.fireError(r.err, items[i])
+	for i := range items {
+		if errs[i] != nil {
+			p.hooks.fireError(errs[i], items[i])
 			continue
 		}
-		out = append(out, r.val)
+		out = append(out, vals[i])
 	}
 
 	return FromSlice(out)
-}
-
-func PipeMapParallelUnordered[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *Pipeline[U] {
-	items := drainSource(p.source)
-	n := len(items)
-	if n == 0 {
-		return FromSlice([]U{})
-	}
-
-	results := make([]U, n)
-	var wg sync.WaitGroup
-	batchSize := (n + workers - 1) / workers
-
-	for w := 0; w < workers; w++ {
-		start := w * batchSize
-		end := start + batchSize
-		if end > n {
-			end = n
-		}
-		if start >= n {
-			break
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
-			for i := lo; i < hi; i++ {
-				results[i] = fn(items[i])
-			}
-		}(start, end)
-	}
-	wg.Wait()
-
-	return FromSlice(results)
 }
 
 func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize int, fn func(T) U) *Pipeline[U] {
@@ -228,6 +185,13 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 }
 
 func drainSource[T any](src Source[T]) []T {
+	if ss, ok := src.(*sliceSource[T]); ok {
+		rem := ss.remaining()
+		ss.idx = len(ss.data)
+		result := make([]T, len(rem))
+		copy(result, rem)
+		return result
+	}
 	if s, ok := src.(Sizer); ok {
 		if hint := s.SizeHint(); hint > 0 {
 			items := make([]T, 0, hint)

@@ -74,14 +74,23 @@ func (p *Pipeline[T]) Peek(fn func(T)) *Pipeline[T] {
 
 func (p *Pipeline[T]) Collect() []T {
 	defer p.hooks.fireCompletion()
-	src := p.source
+	noHooks := !p.hooks.hasElement()
 
+	if noHooks {
+		if dc, ok := p.source.(directCollectable[T]); ok {
+			if result := dc.collectAll(); result != nil {
+				return result
+			}
+		}
+	}
+
+	src := p.source
 	var result []T
 	if hint := sizeHint(src); hint > 0 {
 		result = make([]T, 0, hint)
 	}
 
-	if p.hooks.hasElement() {
+	if !noHooks {
 		for {
 			v, ok := src.Next()
 			if !ok {
@@ -134,9 +143,20 @@ func (p *Pipeline[T]) CollectTo(dst []T) []T {
 
 func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
 	defer p.hooks.fireCompletion()
+
+	if !p.hooks.hasElement() {
+		if ss, ok := p.source.(*sliceSource[T]); ok {
+			acc := initial
+			for _, v := range ss.remaining() {
+				acc = fn(acc, v)
+			}
+			ss.idx = len(ss.data)
+			return acc
+		}
+	}
+
 	src := p.source
 	acc := initial
-
 	if p.hooks.hasElement() {
 		for {
 			v, ok := src.Next()
@@ -147,7 +167,6 @@ func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
 			acc = fn(acc, v)
 		}
 	}
-
 	for {
 		v, ok := src.Next()
 		if !ok {
@@ -159,8 +178,18 @@ func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
 
 func (p *Pipeline[T]) ForEach(fn func(T)) {
 	defer p.hooks.fireCompletion()
-	src := p.source
 
+	if !p.hooks.hasElement() {
+		if ss, ok := p.source.(*sliceSource[T]); ok {
+			for _, v := range ss.remaining() {
+				fn(v)
+			}
+			ss.idx = len(ss.data)
+			return
+		}
+	}
+
+	src := p.source
 	if p.hooks.hasElement() {
 		for {
 			v, ok := src.Next()
@@ -171,7 +200,6 @@ func (p *Pipeline[T]) ForEach(fn func(T)) {
 			fn(v)
 		}
 	}
-
 	for {
 		v, ok := src.Next()
 		if !ok {
@@ -183,9 +211,17 @@ func (p *Pipeline[T]) ForEach(fn func(T)) {
 
 func (p *Pipeline[T]) Count() int {
 	defer p.hooks.fireCompletion()
+
+	if !p.hooks.hasElement() {
+		if ss, ok := p.source.(*sliceSource[T]); ok {
+			n := len(ss.remaining())
+			ss.idx = len(ss.data)
+			return n
+		}
+	}
+
 	src := p.source
 	n := 0
-
 	if p.hooks.hasElement() {
 		for {
 			v, ok := src.Next()
@@ -197,7 +233,6 @@ func (p *Pipeline[T]) Count() int {
 			_ = v
 		}
 	}
-
 	for {
 		if _, ok := src.Next(); !ok {
 			return n
@@ -217,8 +252,20 @@ func (p *Pipeline[T]) First() (T, bool) {
 
 func (p *Pipeline[T]) Any(fn func(T) bool) bool {
 	defer p.hooks.fireCompletion()
-	src := p.source
 
+	if !p.hooks.hasElement() {
+		if ss, ok := p.source.(*sliceSource[T]); ok {
+			for _, v := range ss.remaining() {
+				if fn(v) {
+					return true
+				}
+			}
+			ss.idx = len(ss.data)
+			return false
+		}
+	}
+
+	src := p.source
 	if p.hooks.hasElement() {
 		for {
 			v, ok := src.Next()
@@ -231,7 +278,6 @@ func (p *Pipeline[T]) Any(fn func(T) bool) bool {
 			}
 		}
 	}
-
 	for {
 		v, ok := src.Next()
 		if !ok {
@@ -245,8 +291,20 @@ func (p *Pipeline[T]) Any(fn func(T) bool) bool {
 
 func (p *Pipeline[T]) All(fn func(T) bool) bool {
 	defer p.hooks.fireCompletion()
-	src := p.source
 
+	if !p.hooks.hasElement() {
+		if ss, ok := p.source.(*sliceSource[T]); ok {
+			for _, v := range ss.remaining() {
+				if !fn(v) {
+					return false
+				}
+			}
+			ss.idx = len(ss.data)
+			return true
+		}
+	}
+
+	src := p.source
 	if p.hooks.hasElement() {
 		for {
 			v, ok := src.Next()
@@ -259,7 +317,6 @@ func (p *Pipeline[T]) All(fn func(T) bool) bool {
 			}
 		}
 	}
-
 	for {
 		v, ok := src.Next()
 		if !ok {

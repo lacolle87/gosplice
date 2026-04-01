@@ -14,6 +14,12 @@ type Sizer interface {
 	SizeHint() int
 }
 
+type directCollectable[T any] interface {
+	collectAll() []T
+}
+
+// --- sliceSource ---
+
 type sliceSource[T any] struct {
 	data []T
 	idx  int
@@ -33,9 +39,23 @@ func (s *sliceSource[T]) SizeHint() int {
 	return len(s.data) - s.idx
 }
 
+func (s *sliceSource[T]) remaining() []T {
+	return s.data[s.idx:]
+}
+
+func (s *sliceSource[T]) collectAll() []T {
+	rem := s.data[s.idx:]
+	s.idx = len(s.data)
+	result := make([]T, len(rem))
+	copy(result, rem)
+	return result
+}
+
 func FromSlice[T any](data []T) *Pipeline[T] {
 	return newPipeline[T](&sliceSource[T]{data: data})
 }
+
+// --- chanSource ---
 
 type chanSource[T any] struct {
 	ch <-chan T
@@ -49,6 +69,8 @@ func (s *chanSource[T]) Next() (T, bool) {
 func FromChannel[T any](ch <-chan T) *Pipeline[T] {
 	return newPipeline[T](&chanSource[T]{ch: ch})
 }
+
+// --- readerSource ---
 
 type readerSource struct {
 	scanner *bufio.Scanner
@@ -74,6 +96,8 @@ func FromReader(r io.Reader) *Pipeline[string] {
 	return newPipeline[string](&readerSource{scanner: bufio.NewScanner(r)})
 }
 
+// --- funcSource ---
+
 type funcSource[T any] struct {
 	fn func() (T, bool)
 }
@@ -86,9 +110,7 @@ func FromFunc[T any](fn func() (T, bool)) *Pipeline[T] {
 	return newPipeline[T](&funcSource[T]{fn: fn})
 }
 
-func FromRange(start, end int) *Pipeline[int] {
-	return newPipeline[int](&rangeSource{cur: start, end: end})
-}
+// --- rangeSource ---
 
 type rangeSource struct {
 	cur int
@@ -112,6 +134,12 @@ func (s *rangeSource) SizeHint() int {
 	return r
 }
 
+func FromRange(start, end int) *Pipeline[int] {
+	return newPipeline[int](&rangeSource{cur: start, end: end})
+}
+
+// --- filterSource ---
+
 type filterSource[T any] struct {
 	inner Source[T]
 	pred  func(T) bool
@@ -129,6 +157,23 @@ func (s *filterSource[T]) Next() (T, bool) {
 		}
 	}
 }
+
+func (s *filterSource[T]) collectAll() []T {
+	if ss, ok := s.inner.(*sliceSource[T]); ok {
+		data := ss.remaining()
+		ss.idx = len(ss.data)
+		result := make([]T, 0, len(data)>>2+4)
+		for _, v := range data {
+			if s.pred(v) {
+				result = append(result, v)
+			}
+		}
+		return result
+	}
+	return nil
+}
+
+// --- takeSource ---
 
 type takeSource[T any] struct {
 	inner Source[T]
@@ -161,6 +206,8 @@ func (s *takeSource[T]) SizeHint() int {
 	return remaining
 }
 
+// --- skipSource ---
+
 type skipSource[T any] struct {
 	inner   Source[T]
 	n       int
@@ -179,6 +226,8 @@ func (s *skipSource[T]) Next() (T, bool) {
 	}
 	return s.inner.Next()
 }
+
+// --- peekSource ---
 
 type peekSource[T any] struct {
 	inner Source[T]
@@ -200,6 +249,8 @@ func (s *peekSource[T]) SizeHint() int {
 	return -1
 }
 
+// --- distinctSource ---
+
 type distinctSource[T comparable] struct {
 	inner Source[T]
 	seen  map[T]struct{}
@@ -218,6 +269,8 @@ func (s *distinctSource[T]) Next() (T, bool) {
 		}
 	}
 }
+
+// --- mapSource ---
 
 type mapSource[T any, U any] struct {
 	inner    Source[T]
@@ -244,6 +297,21 @@ func (s *mapSource[T, U]) SizeHint() int {
 	}
 	return -1
 }
+
+func (s *mapSource[T, U]) collectAll() []U {
+	if ss, ok := s.inner.(*sliceSource[T]); ok && !s.hasHooks {
+		data := ss.remaining()
+		ss.idx = len(ss.data)
+		result := make([]U, len(data))
+		for i, v := range data {
+			result[i] = s.fn(v)
+		}
+		return result
+	}
+	return nil
+}
+
+// --- mapErrSource ---
 
 type mapErrSource[T any, U any] struct {
 	inner    Source[T]
@@ -274,6 +342,8 @@ func (s *mapErrSource[T, U]) Next() (U, bool) {
 	}
 }
 
+// --- flatMapSource ---
+
 type flatMapSource[T any, U any] struct {
 	inner    Source[T]
 	fn       func(T) []U
@@ -302,6 +372,8 @@ func (s *flatMapSource[T, U]) Next() (U, bool) {
 		s.idx = 0
 	}
 }
+
+// --- chunkSource ---
 
 type chunkSource[T any] struct {
 	inner    Source[T]
@@ -332,6 +404,33 @@ func (s *chunkSource[T]) Next() ([]T, bool) {
 	}
 	return chunk, true
 }
+
+func (s *chunkSource[T]) collectAll() [][]T {
+	if ss, ok := s.inner.(*sliceSource[T]); ok && !s.hasHooks {
+		data := ss.remaining()
+		ss.idx = len(ss.data)
+		n := len(data)
+		if n == 0 {
+			return nil
+		}
+		numChunks := (n + s.size - 1) / s.size
+		chunks := make([][]T, numChunks)
+		for i := 0; i < numChunks; i++ {
+			start := i * s.size
+			end := start + s.size
+			if end > n {
+				end = n
+			}
+			chunk := make([]T, end-start)
+			copy(chunk, data[start:end])
+			chunks[i] = chunk
+		}
+		return chunks
+	}
+	return nil
+}
+
+// --- windowSource ---
 
 type windowSource[T any] struct {
 	inner    Source[T]
@@ -393,6 +492,34 @@ func (s *windowSource[T]) Next() ([]T, bool) {
 	}
 	return out, true
 }
+
+func (s *windowSource[T]) collectAll() [][]T {
+	if ss, ok := s.inner.(*sliceSource[T]); ok && !s.hasHooks {
+		data := ss.remaining()
+		ss.idx = len(ss.data)
+		n := len(data)
+		if n == 0 {
+			return nil
+		}
+		if n < s.size {
+			out := make([]T, n)
+			copy(out, data)
+			return [][]T{out}
+		}
+		numWindows := (n-s.size)/s.step + 1
+		windows := make([][]T, numWindows)
+		for i := 0; i < numWindows; i++ {
+			start := i * s.step
+			w := make([]T, s.size)
+			copy(w, data[start:start+s.size])
+			windows[i] = w
+		}
+		return windows
+	}
+	return nil
+}
+
+// --- helpers ---
 
 func sizeHint[T any](src Source[T]) int {
 	if s, ok := src.(Sizer); ok {

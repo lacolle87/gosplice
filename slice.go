@@ -133,9 +133,9 @@ func Flat[T any](slice [][]T) []T {
 		total += len(v)
 	}
 	result := make([]T, total)
-	idx := 0
+	off := 0
 	for _, v := range slice {
-		idx += copy(result[idx:], v)
+		off += copy(result[off:], v)
 	}
 	return result
 }
@@ -201,7 +201,7 @@ func Chunk[T any](slice []T, size int) [][]T {
 	return chunks
 }
 
-const removeLinearThreshold = 16
+const removeLinearThreshold = 8
 
 func Remove[T comparable](slice []T, remove []T) []T {
 	if len(slice) == 0 {

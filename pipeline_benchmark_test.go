@@ -207,6 +207,30 @@ func BenchmarkPipelineVsStandalone_Reduce(b *testing.B) {
 	})
 }
 
+func BenchmarkPipelineCollect(b *testing.B) {
+	data := makeRange(10000)
+
+	b.Run("direct_slice", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			FromSlice(data).Collect()
+		}
+	})
+
+	b.Run("after_filter", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			FromSlice(data).
+				Filter(func(n int) bool { return n%2 == 0 }).
+				Collect()
+		}
+	})
+
+	b.Run("after_map", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			PipeMap(FromSlice(data), func(n int) int { return n * 2 }).Collect()
+		}
+	})
+}
+
 func BenchmarkPipeMapParallelHeavy(b *testing.B) {
 	data := makeRange(10000)
 	heavy := func(n int) int {
