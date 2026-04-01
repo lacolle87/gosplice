@@ -3,10 +3,8 @@ package gosplice
 func PipeMap[T any, U any](p *Pipeline[T], fn func(T) U) *Pipeline[U] {
 	return &Pipeline[U]{
 		source: &mapSource[T, U]{
-			inner:    p.source,
-			fn:       fn,
-			hooks:    p.hooks,
-			hasHooks: p.hooks.hasElement(),
+			inner: p.source, fn: fn,
+			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 		},
 		hooks: newHooks[U](),
 	}
@@ -15,11 +13,9 @@ func PipeMap[T any, U any](p *Pipeline[T], fn func(T) U) *Pipeline[U] {
 func PipeMapErr[T any, U any](p *Pipeline[T], fn func(T) (U, error)) *Pipeline[U] {
 	return &Pipeline[U]{
 		source: &mapErrSource[T, U]{
-			inner:    p.source,
-			fn:       fn,
-			hooks:    p.hooks,
-			hasHooks: p.hooks.hasElement(),
-			hasErr:   p.hooks.hasError(),
+			inner: p.source, fn: fn,
+			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
+			hasErr: p.hooks.hasError(), maxRetries: p.hooks.MaxRetries,
 		},
 		hooks: newHooks[U](),
 	}
@@ -28,10 +24,8 @@ func PipeMapErr[T any, U any](p *Pipeline[T], fn func(T) (U, error)) *Pipeline[U
 func PipeFlatMap[T any, U any](p *Pipeline[T], fn func(T) []U) *Pipeline[U] {
 	return &Pipeline[U]{
 		source: &flatMapSource[T, U]{
-			inner:    p.source,
-			fn:       fn,
-			hooks:    p.hooks,
-			hasHooks: p.hooks.hasElement(),
+			inner: p.source, fn: fn,
+			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 		},
 		hooks: newHooks[U](),
 	}
@@ -39,21 +33,16 @@ func PipeFlatMap[T any, U any](p *Pipeline[T], fn func(T) []U) *Pipeline[U] {
 
 func PipeDistinct[T comparable](p *Pipeline[T]) *Pipeline[T] {
 	return &Pipeline[T]{
-		source: &distinctSource[T]{
-			inner: p.source,
-			seen:  make(map[T]struct{}),
-		},
-		hooks: p.hooks,
+		source: &distinctSource[T]{inner: p.source, seen: make(map[T]struct{})},
+		hooks:  p.hooks,
 	}
 }
 
 func PipeChunk[T any](p *Pipeline[T], size int) *Pipeline[[]T] {
 	return &Pipeline[[]T]{
 		source: &chunkSource[T]{
-			inner:    p.source,
-			size:     size,
-			hooks:    p.hooks,
-			hasHooks: p.hooks.hasElement(),
+			inner: p.source, size: size,
+			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 		},
 		hooks: newHooks[[]T](),
 	}
@@ -62,11 +51,8 @@ func PipeChunk[T any](p *Pipeline[T], size int) *Pipeline[[]T] {
 func PipeWindow[T any](p *Pipeline[T], size, step int) *Pipeline[[]T] {
 	return &Pipeline[[]T]{
 		source: &windowSource[T]{
-			inner:    p.source,
-			size:     size,
-			step:     step,
-			hooks:    p.hooks,
-			hasHooks: p.hooks.hasElement(),
+			inner: p.source, size: size, step: step,
+			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 		},
 		hooks: newHooks[[]T](),
 	}

@@ -29,7 +29,6 @@ func GroupBy[T any, K comparable](p *Pipeline[T], keyFn func(T) K) map[K][]T {
 			groups[k] = append(groups[k], v)
 		}
 	}
-
 	for {
 		v, ok := src.Next()
 		if !ok {

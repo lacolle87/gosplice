@@ -14,12 +14,12 @@ func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *P
 	batchSize := (n + workers - 1) / workers
 
 	for w := 0; w < workers; w++ {
-		start := w * batchSize
-		end := start + batchSize
-		if end > n {
-			end = n
+		lo := w * batchSize
+		hi := lo + batchSize
+		if hi > n {
+			hi = n
 		}
-		if start >= n {
+		if lo >= n {
 			break
 		}
 		wg.Add(1)
@@ -28,10 +28,9 @@ func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *P
 			for i := lo; i < hi; i++ {
 				results[i] = fn(items[i])
 			}
-		}(start, end)
+		}(lo, hi)
 	}
 	wg.Wait()
-
 	return FromSlice(results)
 }
 
@@ -47,12 +46,12 @@ func PipeFilterParallel[T any](p *Pipeline[T], workers int, fn func(T) bool) *Pi
 	batchSize := (n + workers - 1) / workers
 
 	for w := 0; w < workers; w++ {
-		start := w * batchSize
-		end := start + batchSize
-		if end > n {
-			end = n
+		lo := w * batchSize
+		hi := lo + batchSize
+		if hi > n {
+			hi = n
 		}
-		if start >= n {
+		if lo >= n {
 			break
 		}
 		wg.Add(1)
@@ -61,7 +60,7 @@ func PipeFilterParallel[T any](p *Pipeline[T], workers int, fn func(T) bool) *Pi
 			for i := lo; i < hi; i++ {
 				keep[i] = fn(items[i])
 			}
-		}(start, end)
+		}(lo, hi)
 	}
 	wg.Wait()
 
@@ -71,14 +70,12 @@ func PipeFilterParallel[T any](p *Pipeline[T], workers int, fn func(T) bool) *Pi
 			count++
 		}
 	}
-
 	result := make([]T, 0, count)
 	for i, v := range items {
 		if keep[i] {
 			result = append(result, v)
 		}
 	}
-
 	return FromSlice(result)
 }
 
@@ -95,12 +92,12 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 	batchSize := (n + workers - 1) / workers
 
 	for w := 0; w < workers; w++ {
-		start := w * batchSize
-		end := start + batchSize
-		if end > n {
-			end = n
+		lo := w * batchSize
+		hi := lo + batchSize
+		if hi > n {
+			hi = n
 		}
-		if start >= n {
+		if lo >= n {
 			break
 		}
 		wg.Add(1)
@@ -109,19 +106,18 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 			for i := lo; i < hi; i++ {
 				vals[i], errs[i] = fn(items[i])
 			}
-		}(start, end)
+		}(lo, hi)
 	}
 	wg.Wait()
 
 	out := make([]U, 0, n)
 	for i := range items {
 		if errs[i] != nil {
-			p.hooks.fireError(errs[i], items[i])
+			p.hooks.handleError(errs[i], items[i], 1)
 			continue
 		}
 		out = append(out, vals[i])
 	}
-
 	return FromSlice(out)
 }
 
@@ -155,10 +151,7 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 			sem <- struct{}{}
 			wg.Add(1)
 			go func(item T, i int) {
-				defer func() {
-					<-sem
-					wg.Done()
-				}()
+				defer func() { <-sem; wg.Done() }()
 				result := fn(item)
 				mu.Lock()
 				pending[i] = result
@@ -182,34 +175,4 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 	}()
 
 	return FromChannel(outCh)
-}
-
-func drainSource[T any](src Source[T]) []T {
-	if ss, ok := src.(*sliceSource[T]); ok {
-		rem := ss.remaining()
-		ss.idx = len(ss.data)
-		result := make([]T, len(rem))
-		copy(result, rem)
-		return result
-	}
-	if s, ok := src.(Sizer); ok {
-		if hint := s.SizeHint(); hint > 0 {
-			items := make([]T, 0, hint)
-			for {
-				v, ok := src.Next()
-				if !ok {
-					return items
-				}
-				items = append(items, v)
-			}
-		}
-	}
-	var items []T
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return items
-		}
-		items = append(items, v)
-	}
 }

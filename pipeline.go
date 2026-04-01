@@ -8,10 +8,7 @@ type Pipeline[T any] struct {
 }
 
 func newPipeline[T any](src Source[T]) *Pipeline[T] {
-	return &Pipeline[T]{
-		source: src,
-		hooks:  newHooks[T](),
-	}
+	return &Pipeline[T]{source: src, hooks: newHooks[T]()}
 }
 
 func (p *Pipeline[T]) WithElementHook(fn ElementHook[T]) *Pipeline[T] {
@@ -21,6 +18,16 @@ func (p *Pipeline[T]) WithElementHook(fn ElementHook[T]) *Pipeline[T] {
 
 func (p *Pipeline[T]) WithErrorHook(fn ErrorHook[T]) *Pipeline[T] {
 	p.hooks.OnError = append(p.hooks.OnError, fn)
+	return p
+}
+
+func (p *Pipeline[T]) WithErrorHandler(fn ErrorHandler[T]) *Pipeline[T] {
+	p.hooks.ErrHandler = fn
+	return p
+}
+
+func (p *Pipeline[T]) WithMaxRetries(n int) *Pipeline[T] {
+	p.hooks.MaxRetries = n
 	return p
 }
 
@@ -45,31 +52,19 @@ func (p *Pipeline[T]) WithTimeout(d time.Duration) *Pipeline[T] {
 }
 
 func (p *Pipeline[T]) Filter(fn func(T) bool) *Pipeline[T] {
-	return &Pipeline[T]{
-		source: &filterSource[T]{inner: p.source, pred: fn},
-		hooks:  p.hooks,
-	}
+	return &Pipeline[T]{source: &filterSource[T]{inner: p.source, pred: fn}, hooks: p.hooks}
 }
 
 func (p *Pipeline[T]) Take(n int) *Pipeline[T] {
-	return &Pipeline[T]{
-		source: &takeSource[T]{inner: p.source, n: n},
-		hooks:  p.hooks,
-	}
+	return &Pipeline[T]{source: &takeSource[T]{inner: p.source, n: n}, hooks: p.hooks}
 }
 
 func (p *Pipeline[T]) Skip(n int) *Pipeline[T] {
-	return &Pipeline[T]{
-		source: &skipSource[T]{inner: p.source, n: n},
-		hooks:  p.hooks,
-	}
+	return &Pipeline[T]{source: &skipSource[T]{inner: p.source, n: n}, hooks: p.hooks}
 }
 
 func (p *Pipeline[T]) Peek(fn func(T)) *Pipeline[T] {
-	return &Pipeline[T]{
-		source: &peekSource[T]{inner: p.source, fn: fn},
-		hooks:  p.hooks,
-	}
+	return &Pipeline[T]{source: &peekSource[T]{inner: p.source, fn: fn}, hooks: p.hooks}
 }
 
 func (p *Pipeline[T]) Collect() []T {
@@ -113,7 +108,6 @@ func (p *Pipeline[T]) Collect() []T {
 func (p *Pipeline[T]) CollectTo(dst []T) []T {
 	defer p.hooks.fireCompletion()
 	src := p.source
-
 	var result []T
 	if dst != nil {
 		result = dst[:0]
@@ -143,7 +137,6 @@ func (p *Pipeline[T]) CollectTo(dst []T) []T {
 
 func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
 	defer p.hooks.fireCompletion()
-
 	if !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			acc := initial
@@ -178,7 +171,6 @@ func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
 
 func (p *Pipeline[T]) ForEach(fn func(T)) {
 	defer p.hooks.fireCompletion()
-
 	if !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			for _, v := range ss.remaining() {
@@ -211,7 +203,6 @@ func (p *Pipeline[T]) ForEach(fn func(T)) {
 
 func (p *Pipeline[T]) Count() int {
 	defer p.hooks.fireCompletion()
-
 	if !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			n := len(ss.remaining())
@@ -252,7 +243,6 @@ func (p *Pipeline[T]) First() (T, bool) {
 
 func (p *Pipeline[T]) Any(fn func(T) bool) bool {
 	defer p.hooks.fireCompletion()
-
 	if !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			for _, v := range ss.remaining() {
@@ -291,7 +281,6 @@ func (p *Pipeline[T]) Any(fn func(T) bool) bool {
 
 func (p *Pipeline[T]) All(fn func(T) bool) bool {
 	defer p.hooks.fireCompletion()
-
 	if !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			for _, v := range ss.remaining() {

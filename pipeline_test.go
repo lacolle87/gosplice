@@ -10,88 +10,40 @@ import (
 )
 
 func TestPipelineFilter(t *testing.T) {
-	result := FromSlice([]int{1, 2, 3, 4, 5, 6}).
-		Filter(func(n int) bool { return n%2 == 0 }).
-		Collect()
-
-	assertSliceEqual(t, []int{2, 4, 6}, result)
+	assertSliceEqual(t, []int{2, 4, 6},
+		FromSlice([]int{1, 2, 3, 4, 5, 6}).Filter(func(n int) bool { return n%2 == 0 }).Collect())
 }
 
 func TestPipelineFilterEmpty(t *testing.T) {
-	result := FromSlice([]int{}).
-		Filter(func(n int) bool { return n > 0 }).
-		Collect()
-
-	if len(result) != 0 {
-		t.Errorf("expected empty slice, got %v", result)
+	r := FromSlice([]int{}).Filter(func(n int) bool { return n > 0 }).Collect()
+	if len(r) != 0 {
+		t.Errorf("expected empty, got %v", r)
 	}
 }
 
 func TestPipelineTake(t *testing.T) {
-	result := FromSlice([]int{1, 2, 3, 4, 5}).
-		Take(3).
-		Collect()
-
-	assertSliceEqual(t, []int{1, 2, 3}, result)
+	assertSliceEqual(t, []int{1, 2, 3}, FromSlice([]int{1, 2, 3, 4, 5}).Take(3).Collect())
 }
 
 func TestPipelineTakeMoreThanAvailable(t *testing.T) {
-	result := FromSlice([]int{1, 2}).
-		Take(10).
-		Collect()
-
-	assertSliceEqual(t, []int{1, 2}, result)
+	assertSliceEqual(t, []int{1, 2}, FromSlice([]int{1, 2}).Take(10).Collect())
 }
 
 func TestPipelineSkip(t *testing.T) {
-	result := FromSlice([]int{1, 2, 3, 4, 5}).
-		Skip(2).
-		Collect()
-
-	assertSliceEqual(t, []int{3, 4, 5}, result)
+	assertSliceEqual(t, []int{3, 4, 5}, FromSlice([]int{1, 2, 3, 4, 5}).Skip(2).Collect())
 }
 
 func TestPipelineSkipAll(t *testing.T) {
-	result := FromSlice([]int{1, 2, 3}).
-		Skip(10).
-		Collect()
-
-	if len(result) != 0 {
-		t.Errorf("expected empty slice, got %v", result)
+	r := FromSlice([]int{1, 2, 3}).Skip(10).Collect()
+	if len(r) != 0 {
+		t.Errorf("expected empty, got %v", r)
 	}
 }
 
 func TestPipelineReduce(t *testing.T) {
-	sum := FromSlice([]int{1, 2, 3, 4, 5}).
-		Reduce(0, func(a, b int) int { return a + b })
-
+	sum := FromSlice([]int{1, 2, 3, 4, 5}).Reduce(0, func(a, b int) int { return a + b })
 	if sum != 15 {
 		t.Errorf("expected 15, got %d", sum)
-	}
-}
-
-func TestReduceCrossType(t *testing.T) {
-	words := []string{"hello", "world", "go"}
-	totalLen := Reduce(words, 0, func(acc int, s string) int {
-		return acc + len(s)
-	})
-	if totalLen != 12 {
-		t.Errorf("expected 12, got %d", totalLen)
-	}
-}
-
-func TestReduceToMap(t *testing.T) {
-	type kv struct {
-		key string
-		val int
-	}
-	items := []kv{{"a", 1}, {"b", 2}, {"c", 3}}
-	m := Reduce(items, make(map[string]int), func(acc map[string]int, item kv) map[string]int {
-		acc[item.key] = item.val
-		return acc
-	})
-	if m["a"] != 1 || m["b"] != 2 || m["c"] != 3 {
-		t.Errorf("unexpected map: %v", m)
 	}
 }
 
@@ -100,46 +52,35 @@ func TestPipeReduceCrossType(t *testing.T) {
 		Item  string
 		Price float64
 	}
-	orders := []Order{{"apple", 1.5}, {"bread", 2.0}, {"cheese", 3.5}}
-	total := PipeReduce(FromSlice(orders), 0.0, func(sum float64, o Order) float64 {
-		return sum + o.Price
-	})
+	total := PipeReduce(FromSlice([]Order{{"a", 1.5}, {"b", 2.0}, {"c", 3.5}}), 0.0,
+		func(sum float64, o Order) float64 { return sum + o.Price })
 	if total != 7.0 {
 		t.Errorf("expected 7.0, got %f", total)
 	}
 }
 
 func TestPipeReduceToString(t *testing.T) {
-	result := PipeReduce(
-		FromSlice([]int{1, 2, 3}),
-		"",
+	r := PipeReduce(FromSlice([]int{1, 2, 3}), "",
 		func(acc string, n int) string {
 			if acc != "" {
 				acc += ","
 			}
 			return acc + fmt.Sprintf("%d", n)
-		},
-	)
-	if result != "1,2,3" {
-		t.Errorf("expected '1,2,3', got '%s'", result)
+		})
+	if r != "1,2,3" {
+		t.Errorf("expected '1,2,3', got %q", r)
 	}
 }
 
 func TestPipelineCount(t *testing.T) {
-	count := FromSlice([]int{1, 2, 3, 4, 5}).
-		Filter(func(n int) bool { return n > 3 }).
-		Count()
-
-	if count != 2 {
-		t.Errorf("expected 2, got %d", count)
+	n := FromSlice([]int{1, 2, 3, 4, 5}).Filter(func(n int) bool { return n > 3 }).Count()
+	if n != 2 {
+		t.Errorf("expected 2, got %d", n)
 	}
 }
 
 func TestPipelineFirst(t *testing.T) {
-	v, ok := FromSlice([]int{10, 20, 30}).
-		Filter(func(n int) bool { return n > 15 }).
-		First()
-
+	v, ok := FromSlice([]int{10, 20, 30}).Filter(func(n int) bool { return n > 15 }).First()
 	if !ok || v != 20 {
 		t.Errorf("expected (20, true), got (%d, %v)", v, ok)
 	}
@@ -148,73 +89,55 @@ func TestPipelineFirst(t *testing.T) {
 func TestPipelineFirstEmpty(t *testing.T) {
 	_, ok := FromSlice([]int{}).First()
 	if ok {
-		t.Error("expected false for empty pipeline")
+		t.Error("expected false")
 	}
 }
 
 func TestPipelineAny(t *testing.T) {
-	has := FromSlice([]int{1, 2, 3}).
-		Any(func(n int) bool { return n == 2 })
-
-	if !has {
+	if !FromSlice([]int{1, 2, 3}).Any(func(n int) bool { return n == 2 }) {
 		t.Error("expected true")
+	}
+	if FromSlice([]int{1, 2, 3}).Any(func(n int) bool { return n == 9 }) {
+		t.Error("expected false")
 	}
 }
 
 func TestPipelineAll(t *testing.T) {
-	all := FromSlice([]int{2, 4, 6}).
-		All(func(n int) bool { return n%2 == 0 })
-
-	if !all {
+	if !FromSlice([]int{2, 4, 6}).All(func(n int) bool { return n%2 == 0 }) {
 		t.Error("expected true")
 	}
-
-	notAll := FromSlice([]int{2, 3, 6}).
-		All(func(n int) bool { return n%2 == 0 })
-
-	if notAll {
+	if FromSlice([]int{2, 3, 6}).All(func(n int) bool { return n%2 == 0 }) {
 		t.Error("expected false")
 	}
 }
 
 func TestPipelineChaining(t *testing.T) {
-	result := FromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}).
-		Filter(func(n int) bool { return n%2 == 0 }).
-		Skip(1).
-		Take(2).
-		Collect()
-
-	assertSliceEqual(t, []int{4, 6}, result)
+	assertSliceEqual(t, []int{4, 6},
+		FromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}).
+			Filter(func(n int) bool { return n%2 == 0 }).
+			Skip(1).
+			Take(2).
+			Collect())
 }
 
 func TestPipeMap(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3})
-	result := PipeMap(p, func(n int) string {
-		return fmt.Sprintf("num_%d", n)
-	}).Collect()
-
-	assertSliceEqual(t, []string{"num_1", "num_2", "num_3"}, result)
+	assertSliceEqual(t, []string{"num_1", "num_2", "num_3"},
+		PipeMap(FromSlice([]int{1, 2, 3}), func(n int) string { return fmt.Sprintf("num_%d", n) }).Collect())
 }
 
 func TestPipeMapTypeChange(t *testing.T) {
-	p := FromSlice([]string{"hello", "world", "go"})
-	result := PipeMap(p, func(s string) int {
-		return len(s)
-	}).Collect()
-
-	assertSliceEqual(t, []int{5, 5, 2}, result)
+	assertSliceEqual(t, []int{5, 5, 2},
+		PipeMap(FromSlice([]string{"hello", "world", "go"}), func(s string) int { return len(s) }).Collect())
 }
 
 func TestPipeMapErr(t *testing.T) {
 	errCount := int32(0)
 	p := FromSlice([]int{1, 2, 0, 4}).
-		WithErrorHook(func(err error, v int) {
-			atomic.AddInt32(&errCount, 1)
-		})
+		WithErrorHook(func(err error, v int) { atomic.AddInt32(&errCount, 1) })
 
 	result := PipeMapErr(p, func(n int) (float64, error) {
 		if n == 0 {
-			return 0, errors.New("division by zero")
+			return 0, errors.New("zero")
 		}
 		return 10.0 / float64(n), nil
 	}).Collect()
@@ -228,25 +151,24 @@ func TestPipeMapErr(t *testing.T) {
 }
 
 func TestPipeFlatMap(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3})
-	result := PipeFlatMap(p, func(n int) []int {
-		return []int{n, n * 10}
-	}).Collect()
-
-	assertSliceEqual(t, []int{1, 10, 2, 20, 3, 30}, result)
+	assertSliceEqual(t, []int{1, 10, 2, 20, 3, 30},
+		PipeFlatMap(FromSlice([]int{1, 2, 3}), func(n int) []int { return []int{n, n * 10} }).Collect())
 }
 
 func TestPipeDistinct(t *testing.T) {
-	p := FromSlice([]int{1, 2, 2, 3, 1, 4, 3})
-	result := PipeDistinct(p).Collect()
+	assertSliceEqual(t, []int{1, 2, 3, 4},
+		PipeDistinct(FromSlice([]int{1, 2, 2, 3, 1, 4, 3})).Collect())
+}
 
-	assertSliceEqual(t, []int{1, 2, 3, 4}, result)
+func TestPipeDistinctEmpty(t *testing.T) {
+	r := PipeDistinct(FromSlice([]int{})).Collect()
+	if len(r) != 0 {
+		t.Errorf("expected empty, got %v", r)
+	}
 }
 
 func TestPipeChunk(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3, 4, 5})
-	chunks := PipeChunk(p, 2).Collect()
-
+	chunks := PipeChunk(FromSlice([]int{1, 2, 3, 4, 5}), 2).Collect()
 	if len(chunks) != 3 {
 		t.Fatalf("expected 3 chunks, got %d", len(chunks))
 	}
@@ -255,67 +177,80 @@ func TestPipeChunk(t *testing.T) {
 	assertSliceEqual(t, []int{5}, chunks[2])
 }
 
-func TestPipeWindow(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3, 4, 5})
-	windows := PipeWindow(p, 3, 1).Collect()
-
-	if len(windows) != 3 {
-		t.Fatalf("expected 3 windows, got %d", len(windows))
+func TestPipeChunkEmpty(t *testing.T) {
+	r := PipeChunk(FromSlice([]int{}), 3).Collect()
+	if len(r) != 0 {
+		t.Errorf("expected empty, got %v", r)
 	}
-	assertSliceEqual(t, []int{1, 2, 3}, windows[0])
-	assertSliceEqual(t, []int{2, 3, 4}, windows[1])
-	assertSliceEqual(t, []int{3, 4, 5}, windows[2])
+}
+
+func TestPipeWindow(t *testing.T) {
+	w := PipeWindow(FromSlice([]int{1, 2, 3, 4, 5}), 3, 1).Collect()
+	if len(w) != 3 {
+		t.Fatalf("expected 3 windows, got %d", len(w))
+	}
+	assertSliceEqual(t, []int{1, 2, 3}, w[0])
+	assertSliceEqual(t, []int{2, 3, 4}, w[1])
+	assertSliceEqual(t, []int{3, 4, 5}, w[2])
+}
+
+func TestPipeWindowStep2(t *testing.T) {
+	w := PipeWindow(FromSlice([]int{1, 2, 3, 4, 5, 6}), 3, 2).Collect()
+	if len(w) != 2 {
+		t.Fatalf("expected 2 windows, got %d", len(w))
+	}
+	assertSliceEqual(t, []int{1, 2, 3}, w[0])
+	assertSliceEqual(t, []int{3, 4, 5}, w[1])
+}
+
+func TestPipeWindowEmpty(t *testing.T) {
+	r := PipeWindow(FromSlice([]int{}), 3, 1).Collect()
+	if len(r) != 0 {
+		t.Errorf("expected empty, got %v", r)
+	}
+}
+
+func TestPipeWindowSmallerThanSize(t *testing.T) {
+	w := PipeWindow(FromSlice([]int{1, 2}), 5, 1).Collect()
+	if len(w) != 1 {
+		t.Fatalf("expected 1 partial window, got %d", len(w))
+	}
+	assertSliceEqual(t, []int{1, 2}, w[0])
 }
 
 func TestGroupBy(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3, 4, 5, 6})
-	groups := GroupBy(p, func(n int) string {
+	g := GroupBy(FromSlice([]int{1, 2, 3, 4, 5, 6}), func(n int) string {
 		if n%2 == 0 {
 			return "even"
 		}
 		return "odd"
 	})
+	assertSliceEqual(t, []int{2, 4, 6}, g["even"])
+	assertSliceEqual(t, []int{1, 3, 5}, g["odd"])
+}
 
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 groups, got %d", len(groups))
+func TestGroupByEmpty(t *testing.T) {
+	g := GroupBy(FromSlice([]int{}), func(n int) int { return n })
+	if len(g) != 0 {
+		t.Errorf("expected empty, got %v", g)
 	}
-	assertSliceEqual(t, []int{2, 4, 6}, groups["even"])
-	assertSliceEqual(t, []int{1, 3, 5}, groups["odd"])
 }
 
 func TestCountBy(t *testing.T) {
-	p := FromSlice([]string{"apple", "avocado", "banana", "blueberry", "cherry"})
-	counts := CountBy(p, func(s string) byte {
-		return s[0]
-	})
-
-	if counts['a'] != 2 {
-		t.Errorf("expected 2 for 'a', got %d", counts['a'])
-	}
-	if counts['b'] != 2 {
-		t.Errorf("expected 2 for 'b', got %d", counts['b'])
-	}
-	if counts['c'] != 1 {
-		t.Errorf("expected 1 for 'c', got %d", counts['c'])
+	c := CountBy(FromSlice([]string{"apple", "avocado", "banana", "blueberry", "cherry"}),
+		func(s string) byte { return s[0] })
+	if c['a'] != 2 || c['b'] != 2 || c['c'] != 1 {
+		t.Errorf("unexpected: %v", c)
 	}
 }
 
 func TestSumBy(t *testing.T) {
 	type item struct {
-		name  string
 		price float64
 	}
-	items := []item{
-		{"a", 10.5},
-		{"b", 20.0},
-		{"c", 5.5},
-	}
-	sum := SumBy(FromSlice(items), func(i item) float64 {
-		return i.price
-	})
-
-	if sum != 36.0 {
-		t.Errorf("expected 36.0, got %f", sum)
+	s := SumBy(FromSlice([]item{{10.5}, {20.0}, {5.5}}), func(i item) float64 { return i.price })
+	if s != 36.0 {
+		t.Errorf("expected 36.0, got %f", s)
 	}
 }
 
@@ -324,55 +259,68 @@ func TestMaxBy(t *testing.T) {
 		name  string
 		score int
 	}
-	items := []item{{"a", 10}, {"b", 50}, {"c", 30}}
-	maximum, ok := MaxBy(FromSlice(items), func(i item) int { return i.score })
+	m, ok := MaxBy(FromSlice([]item{{"a", 10}, {"b", 50}, {"c", 30}}), func(i item) int { return i.score })
+	if !ok || m.name != "b" {
+		t.Errorf("expected b, got %v", m)
+	}
+}
 
-	if !ok || maximum.name != "b" {
-		t.Errorf("expected b with score 50, got %v", maximum)
+func TestMaxByEmpty(t *testing.T) {
+	_, ok := MaxBy(FromSlice([]int{}), func(n int) int { return n })
+	if ok {
+		t.Error("expected false")
 	}
 }
 
 func TestMinBy(t *testing.T) {
-	minimum, ok := MinBy(FromSlice([]int{5, 1, 3, 2}), func(n int) int { return n })
-	if !ok || minimum != 1 {
-		t.Errorf("expected 1, got %d", minimum)
+	m, ok := MinBy(FromSlice([]int{5, 1, 3, 2}), func(n int) int { return n })
+	if !ok || m != 1 {
+		t.Errorf("expected 1, got %d", m)
+	}
+}
+
+func TestMinByEmpty(t *testing.T) {
+	_, ok := MinBy(FromSlice([]int{}), func(n int) int { return n })
+	if ok {
+		t.Error("expected false")
 	}
 }
 
 func TestPartition(t *testing.T) {
-	matched, unmatched := Partition(
-		FromSlice([]int{1, 2, 3, 4, 5}),
-		func(n int) bool { return n%2 == 0 },
-	)
-
-	assertSliceEqual(t, []int{2, 4}, matched)
-	assertSliceEqual(t, []int{1, 3, 5}, unmatched)
+	m, u := Partition(FromSlice([]int{1, 2, 3, 4, 5}), func(n int) bool { return n%2 == 0 })
+	assertSliceEqual(t, []int{2, 4}, m)
+	assertSliceEqual(t, []int{1, 3, 5}, u)
 }
 
 func TestPipeMapParallel(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3, 4, 5})
-	result := PipeMapParallel(p, 4, func(n int) int {
-		return n * n
-	}).Collect()
+	assertSliceEqual(t, []int{1, 4, 9, 16, 25},
+		PipeMapParallel(FromSlice([]int{1, 2, 3, 4, 5}), 4, func(n int) int { return n * n }).Collect())
+}
 
-	assertSliceEqual(t, []int{1, 4, 9, 16, 25}, result)
+func TestPipeMapParallelEmpty(t *testing.T) {
+	r := PipeMapParallel(FromSlice([]int{}), 4, func(n int) int { return n }).Collect()
+	if len(r) != 0 {
+		t.Errorf("expected empty, got %v", r)
+	}
 }
 
 func TestPipeFilterParallel(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
-	result := PipeFilterParallel(p, 4, func(n int) bool {
-		return n%3 == 0
-	}).Collect()
+	assertSliceEqual(t, []int{3, 6, 9},
+		PipeFilterParallel(FromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}), 4,
+			func(n int) bool { return n%3 == 0 }).Collect())
+}
 
-	assertSliceEqual(t, []int{3, 6, 9}, result)
+func TestPipeFilterParallelEmpty(t *testing.T) {
+	r := PipeFilterParallel(FromSlice([]int{}), 4, func(n int) bool { return true }).Collect()
+	if len(r) != 0 {
+		t.Errorf("expected empty, got %v", r)
+	}
 }
 
 func TestPipeMapParallelErr(t *testing.T) {
 	errCount := int32(0)
 	p := FromSlice([]int{1, 0, 3, 0, 5}).
-		WithErrorHook(func(err error, v int) {
-			atomic.AddInt32(&errCount, 1)
-		})
+		WithErrorHook(func(err error, v int) { atomic.AddInt32(&errCount, 1) })
 
 	result := PipeMapParallelErr(p, 2, func(n int) (int, error) {
 		if n == 0 {
@@ -387,29 +335,45 @@ func TestPipeMapParallelErr(t *testing.T) {
 	}
 }
 
-func TestPipeBatch(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3, 4, 5})
-	batches := PipeBatch(p, BatchConfig{Size: 2}).Collect()
+func TestPipeMapParallelStreamOrdered(t *testing.T) {
+	assertSliceEqual(t, []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100},
+		PipeMapParallelStream(FromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}), 4, 16,
+			func(n int) int { return n * 10 }).Collect())
+}
 
-	if len(batches) != 3 {
-		t.Fatalf("expected 3 batches, got %d", len(batches))
+func TestPipeBatch(t *testing.T) {
+	b := PipeBatch(FromSlice([]int{1, 2, 3, 4, 5}), BatchConfig{Size: 2}).Collect()
+	if len(b) != 3 {
+		t.Fatalf("expected 3 batches, got %d", len(b))
 	}
-	assertSliceEqual(t, []int{1, 2}, batches[0])
-	assertSliceEqual(t, []int{3, 4}, batches[1])
-	assertSliceEqual(t, []int{5}, batches[2])
+	assertSliceEqual(t, []int{1, 2}, b[0])
+	assertSliceEqual(t, []int{3, 4}, b[1])
+	assertSliceEqual(t, []int{5}, b[2])
 }
 
 func TestBatchHookFired(t *testing.T) {
-	batchCount := 0
+	count := 0
 	p := FromSlice([]int{1, 2, 3, 4, 5}).
-		WithBatchHook(func(batch []int) {
-			batchCount++
-		})
-
+		WithBatchHook(func(batch []int) { count++ })
 	_ = PipeBatch(p, BatchConfig{Size: 2}).Collect()
+	if count != 3 {
+		t.Errorf("expected 3, got %d", count)
+	}
+}
 
-	if batchCount != 3 {
-		t.Errorf("expected 3 batch hooks, got %d", batchCount)
+func TestPipeBatchWithTimeout(t *testing.T) {
+	ch := make(chan int, 10)
+	for i := 1; i <= 5; i++ {
+		ch <- i
+	}
+	close(ch)
+	batches := PipeBatch(FromChannel(ch), BatchConfig{Size: 3, MaxWait: 100 * time.Millisecond}).Collect()
+	total := 0
+	for _, b := range batches {
+		total += len(b)
+	}
+	if total != 5 {
+		t.Errorf("expected 5 total, got %d", total)
 	}
 }
 
@@ -419,29 +383,23 @@ func TestFromChannel(t *testing.T) {
 		ch <- i
 	}
 	close(ch)
-
-	result := FromChannel(ch).
-		Filter(func(n int) bool { return n > 2 }).
-		Collect()
-
-	assertSliceEqual(t, []int{3, 4, 5}, result)
+	assertSliceEqual(t, []int{3, 4, 5},
+		FromChannel(ch).Filter(func(n int) bool { return n > 2 }).Collect())
 }
 
 func TestFromReader(t *testing.T) {
-	r := strings.NewReader("hello\nworld\ngo")
-	result := FromReader(r).Collect()
-
-	assertSliceEqual(t, []string{"hello", "world", "go"}, result)
+	assertSliceEqual(t, []string{"hello", "world", "go"},
+		FromReader(strings.NewReader("hello\nworld\ngo")).Collect())
 }
 
 func TestFromRange(t *testing.T) {
-	result := FromRange(0, 5).Collect()
-	assertSliceEqual(t, []int{0, 1, 2, 3, 4}, result)
+	assertSliceEqual(t, []int{0, 1, 2, 3, 4}, FromRange(0, 5).Collect())
+	assertSliceEqual(t, []int{}, FromRange(5, 5).Collect())
 }
 
 func TestFromFunc(t *testing.T) {
 	i := 0
-	result := FromFunc(func() (int, bool) {
+	r := FromFunc(func() (int, bool) {
 		if i >= 3 {
 			return 0, false
 		}
@@ -449,44 +407,80 @@ func TestFromFunc(t *testing.T) {
 		i++
 		return v, true
 	}).Collect()
+	assertSliceEqual(t, []int{0, 1, 4}, r)
+}
 
-	assertSliceEqual(t, []int{0, 1, 4}, result)
+func TestPeek(t *testing.T) {
+	var peeked []int
+	r := FromSlice([]int{1, 2, 3}).Peek(func(n int) { peeked = append(peeked, n) }).Collect()
+	assertSliceEqual(t, []int{1, 2, 3}, r)
+	assertSliceEqual(t, []int{1, 2, 3}, peeked)
+}
+
+func TestCollectToNil(t *testing.T) {
+	assertSliceEqual(t, []int{1, 2, 3}, FromSlice([]int{1, 2, 3}).CollectTo(nil))
+}
+
+func TestCollectToPreallocated(t *testing.T) {
+	buf := make([]int, 0, 100)
+	assertSliceEqual(t, []int{1, 2, 3}, FromSlice([]int{1, 2, 3}).CollectTo(buf))
+}
+
+func TestWriteTo(t *testing.T) {
+	var got []int
+	FromSlice([]int{1, 2, 3}).WriteTo(func(n int) { got = append(got, n) })
+	assertSliceEqual(t, []int{1, 2, 3}, got)
 }
 
 func TestElementHookFired(t *testing.T) {
 	count := int32(0)
 	FromSlice([]int{1, 2, 3}).
-		WithElementHook(func(v int) {
-			atomic.AddInt32(&count, 1)
-		}).
+		WithElementHook(func(v int) { atomic.AddInt32(&count, 1) }).
 		Collect()
-
 	if atomic.LoadInt32(&count) != 3 {
-		t.Errorf("expected 3 element hooks, got %d", count)
+		t.Errorf("expected 3, got %d", count)
 	}
 }
 
 func TestCompletionHookFired(t *testing.T) {
 	completed := false
-	FromSlice([]int{1, 2, 3}).
-		WithCompletionHook(func() {
-			completed = true
-		}).
-		Collect()
-
+	FromSlice([]int{1, 2, 3}).WithCompletionHook(func() { completed = true }).Collect()
 	if !completed {
-		t.Error("completion hook not fired")
+		t.Error("not fired")
 	}
 }
 
-func TestPeek(t *testing.T) {
-	var peeked []int
-	result := FromSlice([]int{1, 2, 3}).
-		Peek(func(n int) { peeked = append(peeked, n) }).
-		Collect()
+func TestCompletionHookOnReduce(t *testing.T) {
+	completed := false
+	FromSlice([]int{1, 2}).WithCompletionHook(func() { completed = true }).Reduce(0, func(a, b int) int { return a + b })
+	if !completed {
+		t.Error("not fired")
+	}
+}
 
-	assertSliceEqual(t, []int{1, 2, 3}, result)
-	assertSliceEqual(t, []int{1, 2, 3}, peeked)
+func TestCompletionHookOnForEach(t *testing.T) {
+	completed := false
+	FromSlice([]int{1}).WithCompletionHook(func() { completed = true }).ForEach(func(n int) {})
+	if !completed {
+		t.Error("not fired")
+	}
+}
+
+func TestCompletionHookOnCount(t *testing.T) {
+	completed := false
+	FromSlice([]int{1}).WithCompletionHook(func() { completed = true }).Count()
+	if !completed {
+		t.Error("not fired")
+	}
+}
+
+func TestMultipleHooksCompose(t *testing.T) {
+	var order []string
+	FromSlice([]int{1}).
+		WithElementHook(func(v int) { order = append(order, "first") }).
+		WithElementHook(func(v int) { order = append(order, "second") }).
+		Collect()
+	assertSliceEqual(t, []string{"first", "second"}, order)
 }
 
 func TestLazyEvaluation(t *testing.T) {
@@ -498,208 +492,31 @@ func TestLazyEvaluation(t *testing.T) {
 		}).
 		Take(1).
 		Collect()
-
 	if atomic.LoadInt32(&evaluated) != 4 {
-		t.Errorf("expected 4 evaluations (lazy), got %d", evaluated)
+		t.Errorf("expected 4 lazy evaluations, got %d", evaluated)
 	}
 }
 
-func TestWriteTo(t *testing.T) {
-	var written []int
-	FromSlice([]int{1, 2, 3}).
-		WriteTo(func(n int) {
-			written = append(written, n)
-		})
-
-	assertSliceEqual(t, []int{1, 2, 3}, written)
-}
-
-func TestEndToEndETLPipeline(t *testing.T) {
+func TestEndToEndETL(t *testing.T) {
 	type Record struct {
-		ID     int
 		Name   string
 		Score  int
 		Active bool
 	}
 
 	records := []Record{
-		{1, "Alice", 85, true},
-		{2, "Bob", 42, false},
-		{3, "Charlie", 91, true},
-		{4, "Diana", 67, true},
-		{5, "Eve", 23, false},
-		{6, "Frank", 78, true},
+		{"Alice", 85, true}, {"Bob", 42, false}, {"Charlie", 91, true},
+		{"Diana", 67, true}, {"Eve", 23, false}, {"Frank", 78, true},
 	}
 
-	errCount := int32(0)
-	elementCount := int32(0)
-
-	p := FromSlice(records).
-		WithElementHook(func(r Record) {
-			atomic.AddInt32(&elementCount, 1)
-		}).
-		WithErrorHook(func(err error, r Record) {
-			atomic.AddInt32(&errCount, 1)
-		}).
-		Filter(func(r Record) bool { return r.Active }).
-		Filter(func(r Record) bool { return r.Score >= 70 })
-
-	names := PipeMap(p, func(r Record) string {
-		return strings.ToUpper(r.Name)
-	}).Collect()
+	names := PipeMap(
+		FromSlice(records).
+			Filter(func(r Record) bool { return r.Active }).
+			Filter(func(r Record) bool { return r.Score >= 70 }),
+		func(r Record) string { return strings.ToUpper(r.Name) },
+	).Collect()
 
 	assertSliceEqual(t, []string{"ALICE", "CHARLIE", "FRANK"}, names)
-}
-
-func assertSliceEqual[T comparable](t *testing.T, expected, actual []T) {
-	t.Helper()
-	if len(expected) != len(actual) {
-		t.Errorf("length mismatch: expected %d, got %d\nexpected: %v\nactual:   %v", len(expected), len(actual), expected, actual)
-		return
-	}
-	for i := range expected {
-		if expected[i] != actual[i] {
-			t.Errorf("mismatch at index %d: expected %v, got %v", i, expected[i], actual[i])
-		}
-	}
-}
-
-func TestCollectToNil(t *testing.T) {
-	result := FromSlice([]int{1, 2, 3}).CollectTo(nil)
-	assertSliceEqual(t, []int{1, 2, 3}, result)
-}
-
-func TestCollectToPreallocated(t *testing.T) {
-	buf := make([]int, 0, 100)
-	result := FromSlice([]int{1, 2, 3}).CollectTo(buf)
-	assertSliceEqual(t, []int{1, 2, 3}, result)
-}
-
-func TestPipeWindowStep2(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3, 4, 5, 6})
-	windows := PipeWindow(p, 3, 2).Collect()
-
-	if len(windows) != 2 {
-		t.Fatalf("expected 2 windows, got %d", len(windows))
-	}
-	assertSliceEqual(t, []int{1, 2, 3}, windows[0])
-	assertSliceEqual(t, []int{3, 4, 5}, windows[1])
-}
-
-func TestPipeWindowSmallerThanSize(t *testing.T) {
-	p := FromSlice([]int{1, 2})
-	windows := PipeWindow(p, 5, 1).Collect()
-
-	if len(windows) != 1 {
-		t.Fatalf("expected 1 partial window, got %d", len(windows))
-	}
-	assertSliceEqual(t, []int{1, 2}, windows[0])
-}
-
-func TestPipeWindowEmpty(t *testing.T) {
-	p := FromSlice([]int{})
-	windows := PipeWindow(p, 3, 1).Collect()
-
-	if len(windows) != 0 {
-		t.Fatalf("expected 0 windows, got %d", len(windows))
-	}
-}
-
-func TestPipeMapParallelStreamOrdered(t *testing.T) {
-	p := FromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
-	result := PipeMapParallelStream(p, 4, 16, func(n int) int {
-		return n * 10
-	}).Collect()
-
-	assertSliceEqual(t, []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}, result)
-}
-
-func TestPipeMapParallelEmpty(t *testing.T) {
-	p := FromSlice([]int{})
-	result := PipeMapParallel(p, 4, func(n int) int { return n }).Collect()
-
-	if len(result) != 0 {
-		t.Errorf("expected empty, got %v", result)
-	}
-}
-
-func TestPipeFilterParallelEmpty(t *testing.T) {
-	p := FromSlice([]int{})
-	result := PipeFilterParallel(p, 4, func(n int) bool { return true }).Collect()
-
-	if len(result) != 0 {
-		t.Errorf("expected empty, got %v", result)
-	}
-}
-
-func TestPipeDistinctEmpty(t *testing.T) {
-	p := FromSlice([]int{})
-	result := PipeDistinct(p).Collect()
-
-	if len(result) != 0 {
-		t.Errorf("expected empty, got %v", result)
-	}
-}
-
-func TestPipeChunkEmpty(t *testing.T) {
-	p := FromSlice([]int{})
-	result := PipeChunk(p, 3).Collect()
-
-	if len(result) != 0 {
-		t.Errorf("expected empty, got %v", result)
-	}
-}
-
-func TestGroupByEmpty(t *testing.T) {
-	groups := GroupBy(FromSlice([]int{}), func(n int) int { return n % 2 })
-	if len(groups) != 0 {
-		t.Errorf("expected empty groups, got %v", groups)
-	}
-}
-
-func TestMaxByEmpty(t *testing.T) {
-	_, ok := MaxBy(FromSlice([]int{}), func(n int) int { return n })
-	if ok {
-		t.Error("expected false for empty slice")
-	}
-}
-
-func TestMinByEmpty(t *testing.T) {
-	_, ok := MinBy(FromSlice([]int{}), func(n int) int { return n })
-	if ok {
-		t.Error("expected false for empty slice")
-	}
-}
-
-func TestMultipleHooksCompose(t *testing.T) {
-	calls := make([]string, 0)
-	FromSlice([]int{1}).
-		WithElementHook(func(v int) { calls = append(calls, "hook1") }).
-		WithElementHook(func(v int) { calls = append(calls, "hook2") }).
-		Collect()
-
-	assertSliceEqual(t, []string{"hook1", "hook2"}, calls)
-}
-
-func TestPipeBatchWithTimeout(t *testing.T) {
-	ch := make(chan int, 10)
-	for i := 1; i <= 5; i++ {
-		ch <- i
-	}
-	close(ch)
-
-	batches := PipeBatch(FromChannel(ch), BatchConfig{
-		Size:    3,
-		MaxWait: 100 * time.Millisecond,
-	}).Collect()
-
-	total := 0
-	for _, b := range batches {
-		total += len(b)
-	}
-	if total != 5 {
-		t.Errorf("expected 5 total elements across batches, got %d", total)
-	}
 }
 
 func TestPipelineForEachCount(t *testing.T) {
@@ -707,7 +524,6 @@ func TestPipelineForEachCount(t *testing.T) {
 	FromSlice([]int{1, 2, 3, 4, 5}).
 		Filter(func(n int) bool { return n%2 == 0 }).
 		ForEach(func(n int) { count++ })
-
 	if count != 2 {
 		t.Errorf("expected 2, got %d", count)
 	}
