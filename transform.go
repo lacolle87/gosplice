@@ -58,11 +58,11 @@ func PipeWindow[T any](p *Pipeline[T], size, step int) *Pipeline[[]T] {
 	}
 }
 
-func PipeReduce[T any, U any](p *Pipeline[T], acc U, fn func(U, T) U) U {
+func PipeReduce[T any, U any](p *Pipeline[T], init U, fn func(U, T) U) U {
 	defer p.hooks.fireCompletion()
-
 	if !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
+			acc := init
 			for _, v := range ss.remaining() {
 				acc = fn(acc, v)
 			}
@@ -70,23 +70,5 @@ func PipeReduce[T any, U any](p *Pipeline[T], acc U, fn func(U, T) U) U {
 			return acc
 		}
 	}
-
-	src := p.source
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return acc
-			}
-			p.hooks.fireElement(v)
-			acc = fn(acc, v)
-		}
-	}
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return acc
-		}
-		acc = fn(acc, v)
-	}
+	return fold(p, init, fn)
 }

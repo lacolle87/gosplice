@@ -4,81 +4,26 @@ import "cmp"
 
 func GroupBy[T any, K comparable](p *Pipeline[T], keyFn func(T) K) map[K][]T {
 	defer p.hooks.fireCompletion()
-	groups := make(map[K][]T)
-
-	if !p.hooks.hasElement() {
-		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
-				k := keyFn(v)
-				groups[k] = append(groups[k], v)
-			}
-			ss.idx = len(ss.data)
-			return groups
-		}
-	}
-
-	src := p.source
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return groups
-			}
-			p.hooks.fireElement(v)
-			k := keyFn(v)
-			groups[k] = append(groups[k], v)
-		}
-	}
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return groups
-		}
+	return fold(p, make(map[K][]T), func(g map[K][]T, v T) map[K][]T {
 		k := keyFn(v)
-		groups[k] = append(groups[k], v)
-	}
+		g[k] = append(g[k], v)
+		return g
+	})
 }
 
 func CountBy[T any, K comparable](p *Pipeline[T], keyFn func(T) K) map[K]int {
 	defer p.hooks.fireCompletion()
-	counts := make(map[K]int)
-
-	if !p.hooks.hasElement() {
-		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
-				counts[keyFn(v)]++
-			}
-			ss.idx = len(ss.data)
-			return counts
-		}
-	}
-
-	src := p.source
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return counts
-			}
-			p.hooks.fireElement(v)
-			counts[keyFn(v)]++
-		}
-	}
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return counts
-		}
-		counts[keyFn(v)]++
-	}
+	return fold(p, make(map[K]int), func(c map[K]int, v T) map[K]int {
+		c[keyFn(v)]++
+		return c
+	})
 }
 
 func SumBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) N {
 	defer p.hooks.fireCompletion()
-	var sum N
-
 	if !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
+			var sum N
 			for _, v := range ss.remaining() {
 				sum += fn(v)
 			}
@@ -86,25 +31,8 @@ func SumBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) N {
 			return sum
 		}
 	}
-
-	src := p.source
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return sum
-			}
-			p.hooks.fireElement(v)
-			sum += fn(v)
-		}
-	}
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return sum
-		}
-		sum += fn(v)
-	}
+	var zero N
+	return fold(p, zero, func(sum N, v T) N { return sum + fn(v) })
 }
 
 func MaxBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) (T, bool) {
@@ -112,39 +40,15 @@ func MaxBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) (T, bool) {
 	var maxElem T
 	var maxVal N
 	found := false
-	fireHooks := p.hooks.hasElement()
-
-	if !fireHooks {
-		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
-				val := fn(v)
-				if !found || val > maxVal {
-					maxVal = val
-					maxElem = v
-					found = true
-				}
-			}
-			ss.idx = len(ss.data)
-			return maxElem, found
-		}
-	}
-
-	src := p.source
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return maxElem, found
-		}
-		if fireHooks {
-			p.hooks.fireElement(v)
-		}
+	drain(p, func(v T) {
 		val := fn(v)
 		if !found || val > maxVal {
 			maxVal = val
 			maxElem = v
 			found = true
 		}
-	}
+	})
+	return maxElem, found
 }
 
 func MinBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) (T, bool) {
@@ -152,72 +56,25 @@ func MinBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) (T, bool) {
 	var minElem T
 	var minVal N
 	found := false
-	fireHooks := p.hooks.hasElement()
-
-	if !fireHooks {
-		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
-				val := fn(v)
-				if !found || val < minVal {
-					minVal = val
-					minElem = v
-					found = true
-				}
-			}
-			ss.idx = len(ss.data)
-			return minElem, found
-		}
-	}
-
-	src := p.source
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return minElem, found
-		}
-		if fireHooks {
-			p.hooks.fireElement(v)
-		}
+	drain(p, func(v T) {
 		val := fn(v)
 		if !found || val < minVal {
 			minVal = val
 			minElem = v
 			found = true
 		}
-	}
+	})
+	return minElem, found
 }
 
-func Partition[T any](p *Pipeline[T], fn func(T) bool) (matched []T, unmatched []T) {
+func Partition[T any](p *Pipeline[T], pred func(T) bool) (matched []T, unmatched []T) {
 	defer p.hooks.fireCompletion()
-	fireHooks := p.hooks.hasElement()
-
-	if !fireHooks {
-		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
-				if fn(v) {
-					matched = append(matched, v)
-				} else {
-					unmatched = append(unmatched, v)
-				}
-			}
-			ss.idx = len(ss.data)
-			return
-		}
-	}
-
-	src := p.source
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return
-		}
-		if fireHooks {
-			p.hooks.fireElement(v)
-		}
-		if fn(v) {
+	drain(p, func(v T) {
+		if pred(v) {
 			matched = append(matched, v)
 		} else {
 			unmatched = append(unmatched, v)
 		}
-	}
+	})
+	return
 }

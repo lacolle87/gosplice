@@ -67,11 +67,12 @@ func (p *Pipeline[T]) Peek(fn func(T)) *Pipeline[T] {
 	return &Pipeline[T]{source: &peekSource[T]{inner: p.source, fn: fn}, hooks: p.hooks}
 }
 
+// Collect retains directCollectable fast path for Map→Filter→Collect chains.
+// Fallback uses drain.
 func (p *Pipeline[T]) Collect() []T {
 	defer p.hooks.fireCompletion()
-	noHooks := !p.hooks.hasElement()
 
-	if noHooks {
+	if !p.hooks.hasElement() {
 		if dc, ok := p.source.(directCollectable[T]); ok {
 			if result := dc.collectAll(); result != nil {
 				return result
@@ -79,60 +80,25 @@ func (p *Pipeline[T]) Collect() []T {
 		}
 	}
 
-	src := p.source
 	var result []T
-	if hint := sizeHint(src); hint > 0 {
+	if hint := sizeHint(p.source); hint > 0 {
 		result = make([]T, 0, hint)
 	}
-
-	if !noHooks {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return result
-			}
-			p.hooks.fireElement(v)
-			result = append(result, v)
-		}
-	}
-
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return result
-		}
-		result = append(result, v)
-	}
+	drain(p, func(v T) { result = append(result, v) })
+	return result
 }
 
+// CollectTo reuses the provided buffer.
 func (p *Pipeline[T]) CollectTo(dst []T) []T {
 	defer p.hooks.fireCompletion()
-	src := p.source
 	var result []T
 	if dst != nil {
 		result = dst[:0]
-	} else if hint := sizeHint(src); hint > 0 {
+	} else if hint := sizeHint(p.source); hint > 0 {
 		result = make([]T, 0, hint)
 	}
-
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return result
-			}
-			p.hooks.fireElement(v)
-			result = append(result, v)
-		}
-	}
-
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return result
-		}
-		result = append(result, v)
-	}
+	drain(p, func(v T) { result = append(result, v) })
+	return result
 }
 
 func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
@@ -147,60 +113,15 @@ func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
 			return acc
 		}
 	}
-
-	src := p.source
-	acc := initial
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return acc
-			}
-			p.hooks.fireElement(v)
-			acc = fn(acc, v)
-		}
-	}
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return acc
-		}
-		acc = fn(acc, v)
-	}
+	return fold(p, initial, func(acc, v T) T { return fn(acc, v) })
 }
 
 func (p *Pipeline[T]) ForEach(fn func(T)) {
 	defer p.hooks.fireCompletion()
-	if !p.hooks.hasElement() {
-		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
-				fn(v)
-			}
-			ss.idx = len(ss.data)
-			return
-		}
-	}
-
-	src := p.source
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return
-			}
-			p.hooks.fireElement(v)
-			fn(v)
-		}
-	}
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return
-		}
-		fn(v)
-	}
+	drain(p, fn)
 }
 
+// Count retains O(1) sliceSource fast path. Fallback uses fold.
 func (p *Pipeline[T]) Count() int {
 	defer p.hooks.fireCompletion()
 	if !p.hooks.hasElement() {
@@ -210,26 +131,7 @@ func (p *Pipeline[T]) Count() int {
 			return n
 		}
 	}
-
-	src := p.source
-	n := 0
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return n
-			}
-			p.hooks.fireElement(v)
-			n++
-			_ = v
-		}
-	}
-	for {
-		if _, ok := src.Next(); !ok {
-			return n
-		}
-		n++
-	}
+	return fold(p, 0, func(n int, _ T) int { return n + 1 })
 }
 
 func (p *Pipeline[T]) First() (T, bool) {
@@ -241,80 +143,24 @@ func (p *Pipeline[T]) First() (T, bool) {
 	return v, ok
 }
 
-func (p *Pipeline[T]) Any(fn func(T) bool) bool {
+func (p *Pipeline[T]) Any(pred func(T) bool) bool {
 	defer p.hooks.fireCompletion()
-	if !p.hooks.hasElement() {
-		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
-				if fn(v) {
-					return true
-				}
-			}
-			ss.idx = len(ss.data)
-			return false
+	return foldWhile(p, false, func(_ bool, v T) (bool, bool) {
+		if pred(v) {
+			return true, false
 		}
-	}
-
-	src := p.source
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return false
-			}
-			p.hooks.fireElement(v)
-			if fn(v) {
-				return true
-			}
-		}
-	}
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return false
-		}
-		if fn(v) {
-			return true
-		}
-	}
+		return false, true
+	})
 }
 
-func (p *Pipeline[T]) All(fn func(T) bool) bool {
+func (p *Pipeline[T]) All(pred func(T) bool) bool {
 	defer p.hooks.fireCompletion()
-	if !p.hooks.hasElement() {
-		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
-				if !fn(v) {
-					return false
-				}
-			}
-			ss.idx = len(ss.data)
-			return true
+	return !foldWhile(p, false, func(_ bool, v T) (bool, bool) {
+		if !pred(v) {
+			return true, false
 		}
-	}
-
-	src := p.source
-	if p.hooks.hasElement() {
-		for {
-			v, ok := src.Next()
-			if !ok {
-				return true
-			}
-			p.hooks.fireElement(v)
-			if !fn(v) {
-				return false
-			}
-		}
-	}
-	for {
-		v, ok := src.Next()
-		if !ok {
-			return true
-		}
-		if !fn(v) {
-			return false
-		}
-	}
+		return false, true
+	})
 }
 
 func (p *Pipeline[T]) WriteTo(fn func(T)) {
