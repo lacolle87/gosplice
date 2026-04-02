@@ -93,7 +93,7 @@ func flaky(r ValidRecord) (ValidRecord, error) {
 
 func main() {
 	fmt.Println("Hooks showcase")
-	fmt.Println("==============\n")
+	fmt.Println("==============")
 
 	records := generateRecords(200)
 
@@ -173,7 +173,7 @@ func main() {
 	var retryAttempts atomic.Int64
 
 	retryResult := gs.PipeMapErr(
-		gs.FromSlice(result1[:min(50, len(result1))]).
+		gs.FromSlice(result1[:minimum(50, len(result1))]).
 			WithErrorHandler(func(err error, elem ValidRecord, attempt int) gs.ErrorAction {
 				retryAttempts.Add(1)
 				if attempt >= 3 {
@@ -186,7 +186,7 @@ func main() {
 	).Collect()
 
 	fmt.Printf("  Input: %d | Output: %d | Retry attempts: %d\n",
-		min(50, len(result1)), len(retryResult), retryAttempts.Load())
+		minimum(50, len(result1)), len(retryResult), retryAttempts.Load())
 
 	// -------------------------------------------------------
 	// Example 4: ready-made RetryHandler with backoff
@@ -196,14 +196,14 @@ func main() {
 	retryAttempts.Store(0)
 
 	retryResult2 := gs.PipeMapErr(
-		gs.FromSlice(result1[:min(50, len(result1))]).
+		gs.FromSlice(result1[:minimum(50, len(result1))]).
 			WithErrorHandler(gs.RetryHandler[ValidRecord](3, 10*time.Millisecond)).
 			WithMaxRetries(5),
 		flaky,
 	).Collect()
 
 	fmt.Printf("  With 10ms backoff: %d out of %d succeeded\n",
-		len(retryResult2), min(50, len(result1)))
+		len(retryResult2), minimum(50, len(result1)))
 
 	// -------------------------------------------------------
 	// Example 5: RetryThenAbort — fail-fast after retries
@@ -215,7 +215,7 @@ func main() {
 	}
 
 	aborted := gs.PipeMapErr(
-		gs.FromSlice(result1[:min(20, len(result1))]).
+		gs.FromSlice(result1[:minimum(20, len(result1))]).
 			WithErrorHandler(gs.RetryThenAbort[ValidRecord](2, 0)).
 			WithMaxRetries(5),
 		alwaysFail,
@@ -298,28 +298,9 @@ func main() {
 
 	fmt.Printf("  Handler fired: %v, Hook fired: %v\n", handlerFired, hookFired)
 	fmt.Println("  (handler takes precedence — hooks are not called)")
-
-	// -------------------------------------------------------
-	// Summary
-	// -------------------------------------------------------
-	fmt.Println("\n--- Summary ---")
-	fmt.Println("Hooks used in this example:")
-	fmt.Println("  CountElements     — atomic counter per element")
-	fmt.Println("  CountErrors       — atomic counter per error")
-	fmt.Println("  CollectErrors     — gather all errors into a slice")
-	fmt.Println("  LogErrorsTo       — log errors to io.Writer")
-	fmt.Println("  CountBatches      — atomic counter per batch")
-	fmt.Println("  WithElementHook   — custom per-element logic (progress)")
-	fmt.Println("  WithErrorHook     — custom error observation")
-	fmt.Println("  WithCompletionHook— cleanup / final metrics")
-	fmt.Println("  WithErrorHandler  — control flow: Skip / Retry / Abort")
-	fmt.Println("  SkipOnError       — drop and continue")
-	fmt.Println("  AbortOnError      — stop pipeline on first error")
-	fmt.Println("  RetryHandler      — retry N times with backoff")
-	fmt.Println("  RetryThenAbort    — retry N times, then abort")
 }
 
-func min(a, b int) int {
+func minimum(a, b int) int {
 	if a < b {
 		return a
 	}

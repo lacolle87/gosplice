@@ -409,75 +409,122 @@ byStatus := gs.CountBy(gs.FromSlice(orders), func(o Order) string { return o.Sta
 
 ---
 
-## Real-world example: streaming ETL from an API
+## Examples
 
-Full working example that streams Star Wars characters from [swapi.dev](https://swapi.dev), collects them through a pipeline, then runs multiple analyses. See [`examples/swapi/main.go`](examples/swapi/main.go).
+Four working examples in [`examples/`](examples/).
+
+### Streaming ETL: Star Wars API → [`examples/swapi/`](examples/swapi/main.go)
+
+Streams characters from a paginated HTTP API, collects through a pipeline with progress hooks, then runs analytics: distributions, grouping, extremes, filtered output to stdout.
 
 ```go
-// Phase 1: stream from paginated API into a channel, collect through pipeline
 people := gs.FromChannel(characterChannel()).
     WithElementHook(gs.CountElements[Person](&fetched)).
-    WithElementHook(func(p Person) {
-        if fetched.Load()%10 == 0 {
-            log.Printf("streamed: %d characters", fetched.Load())
-        }
-    }).
-    WithCompletionHook(func() {
-        log.Printf("stream complete: %d characters in %v", fetched.Load(), time.Since(start))
-    }).
+    WithCompletionHook(func() { log.Printf("done: %d in %v", fetched.Load(), time.Since(start)) }).
     Collect()
 
-// Phase 2: single-pass stats using cross-type Reduce
-stats := gs.Reduce(people, Stats{}, func(s Stats, p Person) Stats {
-    s.Total++
-    if h := p.GetHeight(); h > 0 {
-        s.HeightSum += h
-        s.HeightCount++
-    }
-    return s
-})
-
-// Phase 3: distributions via CountBy
+stats := gs.Reduce(people, Stats{}, func(s Stats, p Person) Stats { ... })
 heightDist := gs.CountBy(gs.FromSlice(people), heightBucket)
-genderDist := gs.CountBy(gs.FromSlice(people), normalizeGender)
-hairDist   := gs.CountBy(gs.FromSlice(people), normalizeHair)
-eyeDist    := gs.CountBy(gs.FromSlice(people), func(p Person) string { return p.EyeColor })
-
-// Phase 4: find extremes
-tallest, _ := gs.MaxBy(
-    gs.FromSlice(people).Filter(func(p Person) bool { return p.GetHeight() > 0 }),
-    func(p Person) int { return p.GetHeight() },
-)
-
-// Phase 5: group names by height category
+tallest, _ := gs.MaxBy(gs.FromSlice(people).Filter(...), func(p Person) int { return p.GetHeight() })
 byHeight := gs.GroupBy(gs.FromSlice(people), heightBucket)
-for bucket, group := range byHeight {
-    names := gs.Map(group, func(p Person) string { return p.Name })
-    fmt.Printf("  %s: %s\n", bucket, strings.Join(names, ", "))
+_ = gs.ToWriterString(gs.FromSlice(people).Filter(...), os.Stdout, formatPerson)
+```
+
+Uses: `FromChannel`, `CountElements`, hooks, `Collect`, `Reduce`, `CountBy`, `MaxBy`, `GroupBy`, `Map`, `Filter`, `PipeMap`, `ToWriterString`.
+
+### Market data: tick stream → candles → [`examples/quotes/`](examples/quotes/main.go)
+
+Generates price ticks, batches them into 1-minute candles, analyzes the session: direction distribution, volume by trend, 3-candle streak detection via sliding windows.
+
+```go
+candles := gs.PipeMap(
+    gs.PipeBatch(gs.FromChannel(generateTicks(600)), gs.BatchConfig{Size: 60}),
+    buildCandle,  // buildCandle uses gs.Reduce internally
+).Collect()
+
+stats := gs.Reduce(candles, SessionStats{...}, func(s SessionStats, c Candle) SessionStats { ... })
+dirDist := gs.CountBy(gs.FromSlice(candles), classifyDirection)
+bullVol := gs.SumBy(gs.FromSlice(candles).Filter(Candle.IsBullish), func(c Candle) int { return c.Volume })
+
+windows := gs.PipeWindow(gs.FromSlice(candles), 3, 1).Collect()
+streaks := gs.Filter(windows, func(w []Candle) bool { return gs.Every(w, Candle.IsBullish) })
+```
+
+Uses: `FromChannel`, `PipeBatch`, `PipeMap`, `CountElements`, `Collect`, `Reduce`, `CountBy`, `SumBy`, `MaxBy`, `MinBy`, `Filter`, `PipeWindow`, `Every`, `ToWriterString`.
+
+### Data analytics: real estate reports → [`examples/realestate/`](examples/realestate/main.go)
+
+Generates 500 property listings (some with bad data), runs them through a validation + labeling pipeline with error tracking, then produces a full market report: district breakdown, agent leaderboard, buyer opportunities, stale listing alerts.
+
+```go
+// Main pipeline: validate → label → collect (bad data skipped via PipeMapErr)
+var processed atomic.Int64
+var badData []error
+
+labeled := gs.PipeMapErr(
+    gs.FromSlice(listings).
+        WithElementHook(gs.CountElements[Property](&processed)).
+        WithErrorHook(gs.CollectErrors[Property](&badData)),
+    func(p Property) (LabeledProperty, error) { return labelProperty(p, avgPriceM2) },
+).Collect()
+
+// Analytics pipelines
+byDistrict := gs.GroupBy(gs.FromSlice(labeled), func(lp LabeledProperty) string { return lp.Property.District })
+for district, group := range byDistrict {
+    summary := gs.Reduce(group, DistrictSummary{...}, aggregateFn)
 }
 
-// Phase 6: write filtered results to stdout
+sold, active := gs.Partition(gs.FromSlice(labeled), isSold)
+fastest, _ := gs.MinBy(gs.FromSlice(sold), func(lp LabeledProperty) int { return lp.DaysOn })
+
+// Chained Filter → ForEach for stale alerts
+gs.FromSlice(active).
+    Filter(func(lp LabeledProperty) bool { return hasLabel(lp, "stale") }).
+    ForEach(func(lp LabeledProperty) { fmt.Printf("  #%d needs price cut\n", lp.Property.ID) })
+
+// Chained Filter → ToWriterString for buyer opportunities
 _ = gs.ToWriterString(
-    gs.FromSlice(people).Filter(func(p Person) bool { return p.GetHeight() > 180 }),
-    os.Stdout,
-    func(p Person) string { return fmt.Sprintf("  %s — %d cm\n", p.Name, p.GetHeight()) },
+    gs.FromSlice(active).Filter(isUnderpriced).Filter(highScore),
+    os.Stdout, formatOpportunity,
 )
 ```
 
-What this uses from GoSplice:
+Uses: `FromSlice`, `PipeMapErr`, `CollectErrors`, `CountElements`, `Collect`, `Filter` (pipeline), `ForEach`, `Count`, `Map`, `FlatMap`, `Some`, `Unique`, `Reduce`, `SumBy`, `MaxBy`, `MinBy`, `CountBy`, `GroupBy`, `Partition`, `ToWriterString`.
 
-| Feature | API |
-|---|---|
-| Streaming source | `FromChannel` |
-| Ready-made hook | `CountElements` |
-| Custom hooks | `WithElementHook`, `WithCompletionHook` |
-| Terminal | `Collect` |
-| Standalone reduce | `Reduce` (cross-type: `[]Person → Stats`) |
-| Distributions | `CountBy` ×4 |
-| Grouping | `GroupBy` + `Map` for names |
-| Extremes | `MaxBy` with `Filter` |
-| Type transform | `PipeMap` (`Person → NameFilms`) |
-| Output sink | `ToWriterString` |
+### Hooks showcase: validation pipeline → [`examples/hooks/`](examples/hooks/main.go)
+
+Focused purely on the hooks system. Processes 200 records with bad data through 9 scenarios: observability hooks (count, log, collect errors), error handlers (skip, abort, retry with backoff, retry-then-abort), batch hooks, hook composition, and handler vs hook precedence.
+
+```go
+// Observability: count + collect + log errors in one pipeline
+labeled := gs.PipeMapErr(
+    gs.FromSlice(records).
+        WithElementHook(gs.CountElements[RawRecord](&elemCount)).
+        WithErrorHook(gs.CountErrors[RawRecord](&errCount)).
+        WithErrorHook(gs.CollectErrors[RawRecord](&collectedErrors)).
+        WithErrorHook(gs.LogErrorsTo[RawRecord](os.Stderr)).
+        WithCompletionHook(func() { fmt.Printf("done: %d processed, %d errors\n", ...) }),
+    validate,
+).Collect()
+
+// Retry with backoff on a flaky service
+result := gs.PipeMapErr(
+    gs.FromSlice(data).
+        WithErrorHandler(gs.RetryHandler[ValidRecord](3, 10*time.Millisecond)).
+        WithMaxRetries(5),
+    callFlakyService,
+).Collect()
+
+// Batch hooks — fire per batch
+gs.PipeBatch(
+    gs.FromSlice(data).WithBatchHook(func(batch []ValidRecord) {
+        fmt.Printf("batch #%d: %d items\n", count, len(batch))
+    }),
+    gs.BatchConfig{Size: 25},
+).Collect()
+```
+
+Uses: `CountElements`, `CountErrors`, `CollectErrors`, `LogErrorsTo`, `CountBatches`, `WithElementHook`, `WithErrorHook`, `WithErrorHandler`, `WithCompletionHook`, `WithMaxRetries`, `SkipOnError`, `AbortOnError`, `RetryHandler`, `RetryThenAbort`, `PipeMapErr`, `PipeBatch`.
 
 ## Testing
 
@@ -503,7 +550,10 @@ gosplice/
 ├── hookfn.go       Ready-made hooks (RetryHandler, CountElements, LogErrorsTo...)
 ├── slice.go        Standalone slice functions (Map, Filter, Reduce, Unique...)
 └── examples/
-    └── swapi/      Streaming ETL from Star Wars API
+    ├── swapi/        Streaming ETL from Star Wars API
+    ├── quotes/       Market tick stream → candle aggregation
+    ├── realestate/   Property labeling and market analytics
+    └── hooks/        Hooks system showcase (all hook types)
 ```
 
 ## License
