@@ -56,27 +56,44 @@ func streamPages(startURL string, client *http.Client) <-chan Person {
 		next := startURL
 
 		for next != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			req, _ := http.NewRequestWithContext(ctx, "GET", next, nil)
-			resp, err := client.Do(req)
-
-			if err != nil {
-				cancel()
-				log.Printf("fetch failed: %s: %v", next, err)
-				return
-			}
-
 			var result struct {
 				Next    string   `json:"next"`
 				Results []Person `json:"results"`
 			}
 
-			err = json.NewDecoder(resp.Body).Decode(&result)
-			resp.Body.Close()
-			cancel()
+			var lastErr error
+			for attempt := 0; attempt < 5; attempt++ {
+				if attempt > 0 {
+					wait := time.Duration(attempt) * 3 * time.Second
+					log.Printf("retry %d for %s (waiting %v)", attempt, next, wait)
+					time.Sleep(wait)
+				}
 
-			if err != nil {
-				log.Printf("decode failed: %v", err)
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				req, _ := http.NewRequestWithContext(ctx, "GET", next, nil)
+				resp, err := client.Do(req)
+
+				if err != nil {
+					cancel()
+					lastErr = err
+					continue
+				}
+
+				err = json.NewDecoder(resp.Body).Decode(&result)
+				resp.Body.Close()
+				cancel()
+
+				if err != nil {
+					lastErr = err
+					continue
+				}
+
+				lastErr = nil
+				break
+			}
+
+			if lastErr != nil {
+				log.Printf("giving up on %s after 5 attempts: %v", next, lastErr)
 				return
 			}
 
@@ -85,7 +102,7 @@ func streamPages(startURL string, client *http.Client) <-chan Person {
 			}
 
 			next = result.Next
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond)
 		}
 	}()
 
