@@ -1,6 +1,14 @@
 package gosplice
 
-import "sync"
+import (
+	"runtime"
+	"sync"
+)
+
+type indexed[U any] struct {
+	i int
+	v U
+}
 
 func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *Pipeline[U] {
 	items := drainSource(p.source)
@@ -126,16 +134,52 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 	hooks := p.hooks
 	fireHooks := hooks.hasElement()
 	outCh := make(chan U, bufSize)
+	done := make(chan struct{})
 
 	go func() {
-		defer close(outCh)
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, workers)
 
-		pending := make(map[int]U)
-		var mu sync.Mutex
-		nextOut := 0
+		resultCh := make(chan indexed[U], workers)
+
+		senderDone := make(chan struct{})
+		go func() {
+			defer close(senderDone)
+			pending := make(map[int]U)
+			nextOut := 0
+			for ir := range resultCh {
+				pending[ir.i] = ir.v
+				for {
+					v, exists := pending[nextOut]
+					if !exists {
+						break
+					}
+					delete(pending, nextOut)
+					nextOut++
+					select {
+					case outCh <- v:
+					case <-done:
+						return
+					}
+				}
+			}
+			for {
+				v, exists := pending[nextOut]
+				if !exists {
+					return
+				}
+				delete(pending, nextOut)
+				nextOut++
+				select {
+				case outCh <- v:
+				case <-done:
+					return
+				}
+			}
+		}()
+
 		idx := 0
+		cancelled := false
 
 		for {
 			v, ok := src.Next()
@@ -148,31 +192,50 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 			myIdx := idx
 			idx++
 
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-done:
+				cancelled = true
+			}
+			if cancelled {
+				break
+			}
 			wg.Add(1)
 			go func(item T, i int) {
 				defer func() { <-sem; wg.Done() }()
 				result := fn(item)
-				mu.Lock()
-				pending[i] = result
-				var toSend []U
-				for {
-					if r, exists := pending[nextOut]; exists {
-						toSend = append(toSend, r)
-						delete(pending, nextOut)
-						nextOut++
-					} else {
-						break
-					}
-				}
-				mu.Unlock()
-				for _, r := range toSend {
-					outCh <- r
+				select {
+				case resultCh <- indexed[U]{i: i, v: result}:
+				case <-done:
 				}
 			}(v, myIdx)
 		}
+
 		wg.Wait()
+		close(resultCh)
+		<-senderDone
+		close(outCh)
 	}()
 
-	return FromChannel(outCh)
+	ss := &stoppableSource[U]{ch: outCh, done: done}
+	runtime.SetFinalizer(ss, (*stoppableSource[U]).stop)
+	return newPipeline[U](ss)
+}
+
+type stoppableSource[T any] struct {
+	ch   <-chan T
+	done chan struct{}
+	once sync.Once
+}
+
+func (s *stoppableSource[T]) Next() (T, bool) {
+	v, ok := <-s.ch
+	if !ok {
+		s.stop()
+	}
+	return v, ok
+}
+
+func (s *stoppableSource[T]) stop() {
+	s.once.Do(func() { close(s.done) })
 }

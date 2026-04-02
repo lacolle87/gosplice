@@ -3,6 +3,7 @@ package gosplice
 import (
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -68,7 +69,10 @@ func CountBatches[T any](counter *atomic.Int64) BatchHook[T] {
 }
 
 func CollectErrors[T any](errs *[]error) ErrorHook[T] {
+	var mu sync.Mutex
 	return func(err error, elem T) {
+		mu.Lock()
 		*errs = append(*errs, err)
+		mu.Unlock()
 	}
 }
