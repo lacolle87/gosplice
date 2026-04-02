@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -140,9 +141,15 @@ func normalizeHair(p Person) string {
 }
 
 func printDist(name string, dist map[string]int) {
+	keys := make([]string, 0, len(dist))
+	for k := range dist {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return dist[keys[i]] > dist[keys[j]] })
+
 	fmt.Printf("\n%s:\n", name)
-	for k, v := range dist {
-		fmt.Printf("  %-12s %d\n", k, v)
+	for _, k := range keys {
+		fmt.Printf("  %-12s %d\n", k, dist[k])
 	}
 }
 
@@ -208,11 +215,16 @@ func main() {
 	})
 	mostFilms, _ := gs.MaxBy(appearances, func(nf NameFilms) int { return nf.Count })
 
-	// Phase 6: character names by height category using GroupBy + PipeMap
+	// Phase 6: character names by height category using GroupBy + Map
 	byHeight := gs.GroupBy(gs.FromSlice(people), heightBucket)
 	fmt.Println("\nCharacters by height group:")
-	for bucket, group := range byHeight {
+	for _, bucket := range []string{"<150cm", "150-170cm", "170-190cm", ">190cm", "unknown"} {
+		group, ok := byHeight[bucket]
+		if !ok {
+			continue
+		}
 		names := gs.Map(group, func(p Person) string { return p.Name })
+		sort.Strings(names)
 		fmt.Printf("  %s: %s\n", bucket, strings.Join(names, ", "))
 	}
 
@@ -239,14 +251,15 @@ func main() {
 	printDist("Hair color", hairDist)
 	printDist("Eye color", eyeDist)
 
-	// Bonus: write tall characters to stdout using ToWriterString
-	fmt.Println("\nTall characters (>180cm):")
-	_ = gs.ToWriterString(
-		gs.FromSlice(people).
-			Filter(func(p Person) bool { return p.GetHeight() > 180 }),
-		os.Stdout,
+	// Bonus: tall characters sorted by height
+	tall := gs.FromSlice(people).
+		Filter(func(p Person) bool { return p.GetHeight() > 180 }).
+		Collect()
+	sort.Slice(tall, func(i, j int) bool { return tall[i].GetHeight() > tall[j].GetHeight() })
+
+	fmt.Printf("\nTall characters (>180cm, %d):\n", len(tall))
+	_ = gs.ToWriterString(gs.FromSlice(tall), os.Stdout,
 		func(p Person) string {
-			return fmt.Sprintf("  %s — %d cm\n", p.Name, p.GetHeight())
-		},
-	)
+			return fmt.Sprintf("  %-20s %d cm\n", p.Name, p.GetHeight())
+		})
 }
