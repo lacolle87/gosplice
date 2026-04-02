@@ -214,7 +214,7 @@ func isSold(lp LabeledProperty) bool { return lp.Property.SoldAt != nil }
 
 func main() {
 	fmt.Println("Real estate market analytics")
-	fmt.Println("============================\n")
+	fmt.Println("============================")
 
 	listings := generateListings(500)
 
