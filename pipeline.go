@@ -29,9 +29,13 @@ func (p *Pipeline[T]) WithContext(ctx context.Context) *Pipeline[T] {
 }
 
 func (p *Pipeline[T]) setErr(err error) {
-	if err != nil {
-		p.pErr.CompareAndSwap(nil, &err)
+	if err == nil {
+		return
 	}
+
+	e := new(error)
+	*e = err
+	p.pErr.CompareAndSwap(nil, e)
 }
 
 func (p *Pipeline[T]) Err() error {
