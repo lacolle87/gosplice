@@ -2,15 +2,21 @@ package gosplice
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 )
+
+type sourceWithErr interface {
+	Err() error
+}
 
 type Pipeline[T any] struct {
 	source Source[T]
 	hooks  *Hooks[T]
 	ctx    context.Context
-	err    error
 	cancel context.CancelFunc
+	pErr   atomic.Pointer[error]
+	done   bool
 }
 
 func newPipeline[T any](src Source[T]) *Pipeline[T] {
@@ -22,11 +28,17 @@ func (p *Pipeline[T]) WithContext(ctx context.Context) *Pipeline[T] {
 	return p
 }
 
-// Err returns the error that caused the pipeline to stop early.
-// Returns nil if the pipeline completed normally.
-// Follows the bufio.Scanner pattern — check after a terminal call.
+func (p *Pipeline[T]) setErr(err error) {
+	if err != nil {
+		p.pErr.CompareAndSwap(nil, &err)
+	}
+}
+
 func (p *Pipeline[T]) Err() error {
-	return p.err
+	if ptr := p.pErr.Load(); ptr != nil {
+		return *ptr
+	}
+	return nil
 }
 
 func (p *Pipeline[T]) WithElementHook(fn ElementHook[T]) *Pipeline[T] {
@@ -92,24 +104,30 @@ func (p *Pipeline[T]) Peek(fn func(T)) *Pipeline[T] {
 	return &Pipeline[T]{source: &peekSource[T]{inner: p.source, fn: fn}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
 }
 
-// finalize runs completion hooks and releases context resources.
-// Must be deferred in every terminal.
 func (p *Pipeline[T]) finalize() {
+	if p.done {
+		return
+	}
+	p.done = true
+
+	if p.Err() == nil {
+		if se, ok := p.source.(sourceWithErr); ok {
+			p.setErr(se.Err())
+		}
+	}
+
 	if p.cancel != nil {
 		p.cancel()
 	}
-	if p.err != nil && p.hooks.Timeout > 0 {
+	if p.Err() != nil && p.hooks.Timeout > 0 {
 		p.hooks.fireTimeout(p.hooks.Timeout)
 	}
 	p.hooks.fireCompletion()
 }
 
-// Collect retains directCollectable fast path for Map→Filter→Collect chains.
-// Fallback uses drain.
 func (p *Pipeline[T]) Collect() []T {
 	defer p.finalize()
 
-	// directCollectable fast path — skip when ctx is set (no cancellation check).
 	if p.ctx == nil && !p.hooks.hasElement() {
 		if dc, ok := p.source.(directCollectable[T]); ok {
 			if result := dc.collectAll(); result != nil {
@@ -126,7 +144,6 @@ func (p *Pipeline[T]) Collect() []T {
 	return result
 }
 
-// CollectTo reuses the provided buffer.
 func (p *Pipeline[T]) CollectTo(dst []T) []T {
 	defer p.finalize()
 	var result []T
@@ -159,7 +176,6 @@ func (p *Pipeline[T]) ForEach(fn func(T)) {
 	drain(p, fn)
 }
 
-// Count retains O(1) sliceSource fast path. Fallback uses fold.
 func (p *Pipeline[T]) Count() int {
 	defer p.finalize()
 	if p.ctx == nil && !p.hooks.hasElement() {
@@ -177,7 +193,7 @@ func (p *Pipeline[T]) First() (T, bool) {
 	if p.ctx != nil {
 		select {
 		case <-p.ctx.Done():
-			p.err = p.ctx.Err()
+			p.setErr(p.ctx.Err())
 			var zero T
 			return zero, false
 		default:

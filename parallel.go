@@ -15,7 +15,7 @@ func parallelResult[T any, U any](p *Pipeline[T], data []U, cancelled bool) *Pip
 	r := FromSlice(data)
 	r.cancel = p.cancel
 	if cancelled {
-		r.err = p.ctx.Err()
+		r.setErr(p.ctx.Err())
 	}
 	return r
 }
@@ -139,6 +139,14 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 	return parallelResult[T, U](p, out, cancelled)
 }
 
+// PipeMapParallelStream processes elements from a streaming source in parallel
+// while preserving order. Uses bounded memory (bufSize).
+//
+// The sender goroutine uses a select-based loop (not bare for-range) so it
+// can exit promptly when mergedCtx is cancelled, instead of waiting for
+// resultCh to close. On the cancellation path, mergedCtx is already cancelled
+// (via pipeCtx propagation or the watcher goroutine), so workers and sender
+// unblock through their respective select cases.
 func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize int, fn func(T) U) *Pipeline[U] {
 	src := p.source
 	hooks := p.hooks
@@ -160,6 +168,7 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 		sem := make(chan struct{}, workers)
 		resultCh := make(chan indexed[U], workers)
 
+		// Watcher: when downstream closes done, cancel mergedCtx.
 		go func() {
 			select {
 			case <-done:
@@ -168,42 +177,57 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 			}
 		}()
 
+		// Sender: reads results, reorders, sends to outCh.
+		// Uses select on mergedCtx.Done() so it exits promptly on
+		// cancellation instead of blocking on a bare for-range.
+		// On normal completion, resultCh is closed after wg.Wait(),
+		// ok==false triggers the flush-and-return path.
 		senderDone := make(chan struct{})
 		go func() {
 			defer close(senderDone)
 			pending := make(map[int]U)
 			nextOut := 0
-			for ir := range resultCh {
-				pending[ir.i] = ir.v
-				for {
-					v, exists := pending[nextOut]
-					if !exists {
-						break
-					}
-					delete(pending, nextOut)
-					nextOut++
-					select {
-					case outCh <- v:
-					case <-mergedCtx.Done():
-						return
-					}
-				}
-			}
+
 			for {
-				v, exists := pending[nextOut]
-				if !exists {
-					return
-				}
-				delete(pending, nextOut)
-				nextOut++
 				select {
-				case outCh <- v:
+				case ir, ok := <-resultCh:
+					if !ok {
+						// resultCh closed — flush remaining pending in order.
+						for {
+							v, exists := pending[nextOut]
+							if !exists {
+								return
+							}
+							delete(pending, nextOut)
+							nextOut++
+							select {
+							case outCh <- v:
+							case <-mergedCtx.Done():
+								return
+							}
+						}
+					}
+					pending[ir.i] = ir.v
+					for {
+						v, exists := pending[nextOut]
+						if !exists {
+							break
+						}
+						delete(pending, nextOut)
+						nextOut++
+						select {
+						case outCh <- v:
+						case <-mergedCtx.Done():
+							return
+						}
+					}
 				case <-mergedCtx.Done():
 					return
 				}
 			}
 		}()
 
+		// Dispatch: read from source, spawn workers.
 		idx := 0
 		for {
 			select {
@@ -239,6 +263,10 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 		}
 
 	cleanup:
+		// On the cancellation path mergedCtx is already cancelled
+		// (via pipeCtx or watcher), so workers exit their send-select
+		// and wg.Wait() returns promptly. On normal completion workers
+		// finish naturally — mergedCtx is still alive, no results dropped.
 		wg.Wait()
 		close(resultCh)
 		<-senderDone

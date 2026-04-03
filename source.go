@@ -87,8 +87,6 @@ func (s *chanCtxSource[T]) Next() (T, bool) {
 	}
 }
 
-// FromChannelCtx creates a pipeline from a channel with context-aware reads.
-// When ctx is cancelled, the source stops reading from ch immediately.
 func FromChannelCtx[T any](ctx context.Context, ch <-chan T) *Pipeline[T] {
 	p := newPipeline[T](&chanCtxSource[T]{ch: ch, ctx: ctx})
 	p.ctx = ctx
@@ -195,18 +193,19 @@ func drainSourceCtx[T any](src Source[T], ctx context.Context) ([]T, bool) {
 
 	if ss, ok := src.(*sliceSource[T]); ok {
 		rem := ss.remaining()
-		ss.idx = len(ss.data)
 		result := make([]T, 0, len(rem))
 		for i, v := range rem {
 			if i&(ctxCheckInterval-1) == 0 {
 				select {
 				case <-done:
+					ss.idx += i
 					return result, true
 				default:
 				}
 			}
 			result = append(result, v)
 		}
+		ss.idx = len(ss.data)
 		return result, false
 	}
 

@@ -3,7 +3,10 @@ package gosplice
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1067,4 +1070,331 @@ func TestFix3_MultipleFinalize_Safe(t *testing.T) {
 	result := r.Collect()
 	assertSliceEqual(t, []int{4, 6}, result)
 	// No panic from double cancel.
+}
+
+// ===========================================================================
+// Fix 1: PipeMapParallelStream — sender select-loop for fast cancel exit
+// ===========================================================================
+
+// TestFix_ParallelStream_NoDeadlockOnCancel verifies that cancelling a
+// context while PipeMapParallelStream is running does NOT deadlock.
+// The slow fn + small buffer provokes back-pressure.
+func TestFix_ParallelStream_NoDeadlockOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		p := PipeMapParallelStream(
+			FromFunc(func() (int, bool) {
+				time.Sleep(5 * time.Millisecond)
+				return 1, true
+			}).WithContext(ctx),
+			4, 2, // small buffer — provokes back-pressure
+			func(n int) int {
+				time.Sleep(20 * time.Millisecond) // slow fn
+				return n * 2
+			},
+		)
+		_ = p.Collect()
+	}()
+
+	// Let some elements flow, then cancel.
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-finished:
+		// No deadlock.
+	case <-time.After(5 * time.Second):
+		t.Fatal("DEADLOCK: PipeMapParallelStream did not terminate after cancel")
+	}
+}
+
+// TestFix_ParallelStream_CancelNoGoroutineLeak checks that all goroutines
+// are cleaned up after context cancellation.
+func TestFix_ParallelStream_CancelNoGoroutineLeak(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	before := runtime.NumGoroutine()
+
+	p := PipeMapParallelStream(
+		FromFunc(func() (int, bool) {
+			time.Sleep(2 * time.Millisecond)
+			return 42, true
+		}).WithContext(ctx),
+		4, 8,
+		func(n int) int { return n * 2 },
+	)
+
+	got := 0
+	p.ForEach(func(v int) {
+		got++
+		if got >= 5 {
+			cancel()
+		}
+	})
+
+	// Allow goroutines to wind down.
+	time.Sleep(200 * time.Millisecond)
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+
+	after := runtime.NumGoroutine()
+	leaked := after - before
+	if leaked > 3 {
+		t.Errorf("goroutine leak: before=%d after=%d delta=%d", before, after, leaked)
+	}
+}
+
+// TestFix_ParallelStream_NormalCompletionUnchanged ensures the sender fix
+// doesn't break the happy path.
+func TestFix_ParallelStream_NormalCompletionUnchanged(t *testing.T) {
+	result := PipeMapParallelStream(
+		FromSlice([]int{1, 2, 3, 4, 5}),
+		2, 8,
+		func(n int) int { return n * 3 },
+	).Collect()
+	assertSliceEqual(t, []int{3, 6, 9, 12, 15}, result)
+}
+
+// TestFix_ParallelStream_OrderPreservedAfterFix ensures order is still correct.
+func TestFix_ParallelStream_OrderPreservedAfterFix(t *testing.T) {
+	result := PipeMapParallelStream(
+		FromSlice([]int{10, 20, 30, 40, 50, 60, 70, 80}),
+		4, 16,
+		func(n int) int { return n + 1 },
+	).Collect()
+	assertSliceEqual(t, []int{11, 21, 31, 41, 51, 61, 71, 81}, result)
+}
+
+// ===========================================================================
+// Fix 2: Data race on p.err — atomic access
+// ===========================================================================
+
+// TestFix_ErrAtomicNoRace should be run with `go test -race`.
+// Writes to err (via ctxDone/setErr) and reads (via Err()) must not race.
+func TestFix_ErrAtomicNoRace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	p := FromFunc(func() (int, bool) {
+		time.Sleep(time.Millisecond)
+		return 1, true
+	}).WithContext(ctx)
+
+	// Read Err() from another goroutine while pipeline is running.
+	var readCount atomic.Int64
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for readCount.Load() < 50 {
+			_ = p.Err() // concurrent read — race detector catches issues here
+			readCount.Add(1)
+			runtime.Gosched()
+		}
+	}()
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	_ = p.Collect()
+	wg.Wait()
+
+	if !errors.Is(p.Err(), context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", p.Err())
+	}
+}
+
+// TestFix_SetErrFirstWriteWins verifies first-write-wins semantics.
+func TestFix_SetErrFirstWriteWins(t *testing.T) {
+	p := FromSlice([]int{1})
+	first := errors.New("first")
+	second := errors.New("second")
+	p.setErr(first)
+	p.setErr(second)
+	if !errors.Is(p.Err(), first) {
+		t.Fatalf("expected first error, got %v", p.Err())
+	}
+}
+
+// TestFix_SetErrNilIgnored verifies that setErr(nil) is a no-op.
+func TestFix_SetErrNilIgnored(t *testing.T) {
+	p := FromSlice([]int{1})
+	p.setErr(nil)
+	if p.Err() != nil {
+		t.Fatalf("expected nil, got %v", p.Err())
+	}
+}
+
+// TestFix_ParallelResultErrPropagated checks that parallelResult
+// correctly propagates ctx error via setErr.
+func TestFix_ParallelResultErrPropagated(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := PipeMapParallel(
+		FromRange(0, 100_000).WithContext(ctx),
+		4,
+		func(n int) int { return n },
+	)
+	_ = p.Collect()
+
+	if !errors.Is(p.Err(), context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", p.Err())
+	}
+}
+
+// ===========================================================================
+// Fix 3: Idempotent finalize — hooks fire only once
+// ===========================================================================
+
+// TestFix_FinalizeIdempotent verifies that calling a terminal twice
+// does not fire completion hooks again and does not panic.
+func TestFix_FinalizeIdempotent(t *testing.T) {
+	var completionCount int32
+	p := FromSlice([]int{1, 2, 3}).
+		WithCompletionHook(func() { atomic.AddInt32(&completionCount, 1) })
+
+	// First call.
+	r1 := p.Collect()
+	assertSliceEqual(t, []int{1, 2, 3}, r1)
+
+	// Second call — source exhausted, should return nil/empty, no hook re-fire.
+	r2 := p.Collect()
+	if len(r2) != 0 && r2 != nil {
+		t.Fatalf("expected empty on second Collect, got %v", r2)
+	}
+
+	if c := atomic.LoadInt32(&completionCount); c != 1 {
+		t.Fatalf("completion hook fired %d times, expected 1", c)
+	}
+}
+
+// TestFix_FinalizeIdempotent_ForEach same test for ForEach.
+func TestFix_FinalizeIdempotent_ForEach(t *testing.T) {
+	var completionCount int32
+	p := FromSlice([]int{1}).
+		WithCompletionHook(func() { atomic.AddInt32(&completionCount, 1) })
+
+	p.ForEach(func(int) {})
+	p.ForEach(func(int) {}) // second call
+
+	if c := atomic.LoadInt32(&completionCount); c != 1 {
+		t.Fatalf("completion hook fired %d times, expected 1", c)
+	}
+}
+
+// ===========================================================================
+// Fix 4: readerSource error propagation
+// ===========================================================================
+
+// failingReader returns n lines then fails with an IO error.
+type failingReader struct {
+	n       int
+	current int
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if r.current >= r.n {
+		return 0, errors.New("simulated disk read error")
+	}
+	r.current++
+	line := fmt.Sprintf("line-%d\n", r.current)
+	return copy(p, line), nil
+}
+
+func TestFix_ReaderSourceErrorPropagated(t *testing.T) {
+	p := FromReader(&failingReader{n: 3})
+	result := p.Collect()
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %v", len(result), result)
+	}
+	if p.Err() == nil {
+		t.Fatal("expected IO error to be propagated to pipeline.Err()")
+	}
+	if p.Err().Error() != "simulated disk read error" {
+		t.Fatalf("unexpected error: %v", p.Err())
+	}
+}
+
+func TestFix_ReaderSourceNoError(t *testing.T) {
+	// Normal reader — no error should be set.
+	r, w := io.Pipe()
+	go func() {
+		fmt.Fprintln(w, "hello")
+		fmt.Fprintln(w, "world")
+		w.Close()
+	}()
+
+	p := FromReader(r)
+	result := p.Collect()
+	assertSliceEqual(t, []string{"hello", "world"}, result)
+	if p.Err() != nil {
+		t.Fatalf("unexpected error: %v", p.Err())
+	}
+}
+
+// ===========================================================================
+// Fix 5: drainSourceCtx — idx correctness on cancellation
+// ===========================================================================
+
+// TestFix_DrainSourceCtx_IdxNotAdvancedOnCancel verifies that when
+// context is cancelled mid-drain, sliceSource.idx reflects only
+// the elements actually consumed (not the full length).
+func TestFix_DrainSourceCtx_IdxNotAdvancedOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancelled
+
+	ss := &sliceSource[int]{data: make([]int, 10_000)}
+	items, cancelled := drainSourceCtx[int](ss, ctx)
+
+	if !cancelled {
+		t.Fatal("expected cancelled=true")
+	}
+	// With pre-cancelled ctx, should get very few elements (0 or near 0).
+	if len(items) >= 10_000 {
+		t.Fatalf("expected early stop, got all %d elements", len(items))
+	}
+	// idx should match what was actually returned, not len(data).
+	if ss.idx >= len(ss.data) {
+		t.Fatalf("idx=%d should be less than len(data)=%d on cancellation",
+			ss.idx, len(ss.data))
+	}
+}
+
+// TestFix_DrainSourceCtx_FullDrainIdxCorrect verifies that without
+// cancellation, idx == len(data) after a full drain.
+func TestFix_DrainSourceCtx_FullDrainIdxCorrect(t *testing.T) {
+	ctx := context.Background()
+	ss := &sliceSource[int]{data: []int{1, 2, 3, 4, 5}}
+	items, cancelled := drainSourceCtx[int](ss, ctx)
+
+	if cancelled {
+		t.Fatal("should not be cancelled")
+	}
+	assertSliceEqual(t, []int{1, 2, 3, 4, 5}, items)
+	if ss.idx != len(ss.data) {
+		t.Fatalf("idx=%d, want %d", ss.idx, len(ss.data))
+	}
+}
+
+// TestFix_PipeMapParallel_PreCancelledCtx_BoundedResult ensures that
+// with a pre-cancelled context, PipeMapParallel doesn't process the
+// entire slice.
+func TestFix_PipeMapParallel_PreCancelledCtx_BoundedResult(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := PipeMapParallel(
+		FromRange(0, 1_000_000).WithContext(ctx),
+		4,
+		func(n int) int { return n * 2 },
+	).Collect()
+
+	if len(result) >= 1_000_000 {
+		t.Fatalf("expected early stop, got all %d elements", len(result))
+	}
 }

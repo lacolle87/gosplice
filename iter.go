@@ -7,7 +7,7 @@ const ctxCheckInterval = 64
 func ctxDone[T any](p *Pipeline[T]) bool {
 	select {
 	case <-p.ctx.Done():
-		p.err = p.ctx.Err()
+		p.setErr(p.ctx.Err())
 		return true
 	default:
 		return false
