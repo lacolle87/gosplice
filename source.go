@@ -2,6 +2,7 @@ package gosplice
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"sync"
 )
@@ -60,6 +61,38 @@ func (s *chanSource[T]) Next() (T, bool) {
 
 func FromChannel[T any](ch <-chan T) *Pipeline[T] {
 	return newPipeline[T](&chanSource[T]{ch: ch})
+}
+
+type chanCtxSource[T any] struct {
+	ch   <-chan T
+	ctx  context.Context
+	done bool
+}
+
+func (s *chanCtxSource[T]) Next() (T, bool) {
+	if s.done {
+		var zero T
+		return zero, false
+	}
+	select {
+	case <-s.ctx.Done():
+		s.done = true
+		var zero T
+		return zero, false
+	case v, ok := <-s.ch:
+		if !ok {
+			s.done = true
+		}
+		return v, ok
+	}
+}
+
+// FromChannelCtx creates a pipeline from a channel with context-aware reads.
+// When ctx is cancelled, the source stops reading from ch immediately.
+func FromChannelCtx[T any](ctx context.Context, ch <-chan T) *Pipeline[T] {
+	p := newPipeline[T](&chanCtxSource[T]{ch: ch, ctx: ctx})
+	p.ctx = ctx
+	return p
 }
 
 type readerSource struct {

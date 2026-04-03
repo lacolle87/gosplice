@@ -49,7 +49,7 @@ type Stats struct {
 	MassCount   int
 }
 
-func streamPages(startURL string, client *http.Client) <-chan Person {
+func streamPages(ctx context.Context, startURL string, client *http.Client) <-chan Person {
 	ch := make(chan Person)
 
 	go func() {
@@ -70,12 +70,16 @@ func streamPages(startURL string, client *http.Client) <-chan Person {
 					time.Sleep(wait)
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				req, _ := http.NewRequestWithContext(ctx, "GET", next, nil)
+				reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				req, _ := http.NewRequestWithContext(reqCtx, "GET", next, nil)
 				resp, err := client.Do(req)
 
 				if err != nil {
 					cancel()
+					// If the parent ctx is done, stop entirely
+					if ctx.Err() != nil {
+						return
+					}
 					lastErr = err
 					continue
 				}
@@ -99,7 +103,11 @@ func streamPages(startURL string, client *http.Client) <-chan Person {
 			}
 
 			for _, p := range result.Results {
-				ch <- p
+				select {
+				case ch <- p:
+				case <-ctx.Done():
+					return
+				}
 			}
 
 			next = result.Next
@@ -162,18 +170,35 @@ func main() {
 	fmt.Println("Streaming ETL pipeline — swapi.dev")
 	fmt.Println("===================================")
 
-	// Phase 1: stream from API, collect all characters
-	people := gs.FromChannel(streamPages("https://swapi.dev/api/people/", &http.Client{})).
+	// Context with 2 minute timeout for the entire ETL job
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Phase 1: stream from API with context-aware source and pipeline
+	pipeline := gs.FromChannelCtx(ctx, streamPages(ctx, "https://swapi.dev/api/people/", &http.Client{})).
 		WithElementHook(gs.CountElements[Person](&fetched)).
 		WithElementHook(func(p Person) {
 			if fetched.Load()%10 == 0 {
 				log.Printf("streamed: %d characters", fetched.Load())
 			}
 		}).
+		WithTimeoutHook(func(d time.Duration) {
+			log.Printf("pipeline timed out after %v", d)
+		}).
 		WithCompletionHook(func() {
 			log.Printf("stream complete: %d characters in %v", fetched.Load(), time.Since(start))
-		}).
-		Collect()
+		})
+
+	people := pipeline.Collect()
+
+	if err := pipeline.Err(); err != nil {
+		log.Printf("pipeline stopped early: %v (collected %d characters)", err, len(people))
+	}
+
+	if len(people) == 0 {
+		fmt.Println("no characters fetched")
+		return
+	}
 
 	// Phase 2: compute stats using Reduce (single pass)
 	stats := gs.Reduce(people, Stats{}, func(s Stats, p Person) Stats {

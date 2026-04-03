@@ -1,6 +1,9 @@
 package gosplice
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type BatchConfig struct {
 	Size    int
@@ -13,7 +16,7 @@ func PipeBatch[T any](p *Pipeline[T], cfg BatchConfig) *Pipeline[[]T] {
 	done := false
 
 	if cfg.MaxWait > 0 {
-		return pipeBatchWithTimeout(src, hooks, cfg)
+		return pipeBatchWithTimeout(src, hooks, cfg, p.ctx)
 	}
 
 	return &Pipeline[[]T]{
@@ -38,10 +41,11 @@ func PipeBatch[T any](p *Pipeline[T], cfg BatchConfig) *Pipeline[[]T] {
 			return batch, true
 		}},
 		hooks: newHooks[[]T](),
+		ctx:   p.ctx,
 	}
 }
 
-func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig) *Pipeline[[]T] {
+func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig, ctx context.Context) *Pipeline[[]T] {
 	outCh := make(chan []T, 4)
 
 	go func() {
@@ -58,7 +62,15 @@ func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig
 				if !ok {
 					return
 				}
-				itemCh <- v
+				if ctx != nil {
+					select {
+					case itemCh <- v:
+					case <-ctx.Done():
+						return
+					}
+				} else {
+					itemCh <- v
+				}
 			}
 		}()
 
@@ -79,6 +91,28 @@ func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig
 			timer.Reset(cfg.MaxWait)
 		}
 
+		if ctx != nil {
+			for {
+				select {
+				case <-ctx.Done():
+					flush()
+					return
+				case v, ok := <-itemCh:
+					if !ok {
+						flush()
+						return
+					}
+					hooks.fireElement(v)
+					batch = append(batch, v)
+					if len(batch) >= cfg.Size {
+						flush()
+					}
+				case <-timer.C:
+					flush()
+				}
+			}
+		}
+
 		for {
 			select {
 			case v, ok := <-itemCh:
@@ -97,5 +131,7 @@ func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig
 		}
 	}()
 
-	return FromChannel(outCh)
+	p := FromChannel(outCh)
+	p.ctx = ctx
+	return p
 }

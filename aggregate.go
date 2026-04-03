@@ -3,7 +3,7 @@ package gosplice
 import "cmp"
 
 func GroupBy[T any, K comparable](p *Pipeline[T], keyFn func(T) K) map[K][]T {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	return fold(p, make(map[K][]T), func(g map[K][]T, v T) map[K][]T {
 		k := keyFn(v)
 		g[k] = append(g[k], v)
@@ -12,7 +12,7 @@ func GroupBy[T any, K comparable](p *Pipeline[T], keyFn func(T) K) map[K][]T {
 }
 
 func CountBy[T any, K comparable](p *Pipeline[T], keyFn func(T) K) map[K]int {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	return fold(p, make(map[K]int), func(c map[K]int, v T) map[K]int {
 		c[keyFn(v)]++
 		return c
@@ -20,8 +20,8 @@ func CountBy[T any, K comparable](p *Pipeline[T], keyFn func(T) K) map[K]int {
 }
 
 func SumBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) N {
-	defer p.hooks.fireCompletion()
-	if !p.hooks.hasElement() {
+	defer p.finalize()
+	if p.ctx == nil && !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			var sum N
 			for _, v := range ss.remaining() {
@@ -36,7 +36,7 @@ func SumBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) N {
 }
 
 func MaxBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) (T, bool) {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	var maxElem T
 	var maxVal N
 	found := false
@@ -52,7 +52,7 @@ func MaxBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) (T, bool) {
 }
 
 func MinBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) (T, bool) {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	var minElem T
 	var minVal N
 	found := false
@@ -68,7 +68,7 @@ func MinBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) (T, bool) {
 }
 
 func Partition[T any](p *Pipeline[T], pred func(T) bool) (matched []T, unmatched []T) {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	drain(p, func(v T) {
 		if pred(v) {
 			matched = append(matched, v)

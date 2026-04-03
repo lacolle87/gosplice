@@ -1,14 +1,29 @@
 package gosplice
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Pipeline[T any] struct {
 	source Source[T]
 	hooks  *Hooks[T]
+	ctx    context.Context
+	err    error
+	cancel context.CancelFunc
 }
 
 func newPipeline[T any](src Source[T]) *Pipeline[T] {
 	return &Pipeline[T]{source: src, hooks: newHooks[T]()}
+}
+
+func (p *Pipeline[T]) WithContext(ctx context.Context) *Pipeline[T] {
+	p.ctx = ctx
+	return p
+}
+
+func (p *Pipeline[T]) Err() error {
+	return p.err
 }
 
 func (p *Pipeline[T]) WithElementHook(fn ElementHook[T]) *Pipeline[T] {
@@ -48,31 +63,51 @@ func (p *Pipeline[T]) WithTimeoutHook(fn TimeoutHook) *Pipeline[T] {
 
 func (p *Pipeline[T]) WithTimeout(d time.Duration) *Pipeline[T] {
 	p.hooks.Timeout = d
+	base := p.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, d)
+	p.ctx = ctx
+	p.cancel = cancel
 	return p
 }
 
 func (p *Pipeline[T]) Filter(fn func(T) bool) *Pipeline[T] {
-	return &Pipeline[T]{source: &filterSource[T]{inner: p.source, pred: fn}, hooks: p.hooks}
+	return &Pipeline[T]{source: &filterSource[T]{inner: p.source, pred: fn}, hooks: p.hooks, ctx: p.ctx}
 }
 
 func (p *Pipeline[T]) Take(n int) *Pipeline[T] {
-	return &Pipeline[T]{source: &takeSource[T]{inner: p.source, n: n}, hooks: p.hooks}
+	return &Pipeline[T]{source: &takeSource[T]{inner: p.source, n: n}, hooks: p.hooks, ctx: p.ctx}
 }
 
 func (p *Pipeline[T]) Skip(n int) *Pipeline[T] {
-	return &Pipeline[T]{source: &skipSource[T]{inner: p.source, n: n}, hooks: p.hooks}
+	return &Pipeline[T]{source: &skipSource[T]{inner: p.source, n: n}, hooks: p.hooks, ctx: p.ctx}
 }
 
 func (p *Pipeline[T]) Peek(fn func(T)) *Pipeline[T] {
-	return &Pipeline[T]{source: &peekSource[T]{inner: p.source, fn: fn}, hooks: p.hooks}
+	return &Pipeline[T]{source: &peekSource[T]{inner: p.source, fn: fn}, hooks: p.hooks, ctx: p.ctx}
+}
+
+// finalize runs completion hooks and releases context resources.
+// Must be deferred in every terminal.
+func (p *Pipeline[T]) finalize() {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	if p.err != nil && p.hooks.Timeout > 0 {
+		p.hooks.fireTimeout(p.hooks.Timeout)
+	}
+	p.hooks.fireCompletion()
 }
 
 // Collect retains directCollectable fast path for Map→Filter→Collect chains.
 // Fallback uses drain.
 func (p *Pipeline[T]) Collect() []T {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 
-	if !p.hooks.hasElement() {
+	// directCollectable fast path — skip when ctx is set (no cancellation check).
+	if p.ctx == nil && !p.hooks.hasElement() {
 		if dc, ok := p.source.(directCollectable[T]); ok {
 			if result := dc.collectAll(); result != nil {
 				return result
@@ -90,7 +125,7 @@ func (p *Pipeline[T]) Collect() []T {
 
 // CollectTo reuses the provided buffer.
 func (p *Pipeline[T]) CollectTo(dst []T) []T {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	var result []T
 	if dst != nil {
 		result = dst[:0]
@@ -102,8 +137,8 @@ func (p *Pipeline[T]) CollectTo(dst []T) []T {
 }
 
 func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
-	defer p.hooks.fireCompletion()
-	if !p.hooks.hasElement() {
+	defer p.finalize()
+	if p.ctx == nil && !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			acc := initial
 			for _, v := range ss.remaining() {
@@ -117,14 +152,14 @@ func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
 }
 
 func (p *Pipeline[T]) ForEach(fn func(T)) {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	drain(p, fn)
 }
 
 // Count retains O(1) sliceSource fast path. Fallback uses fold.
 func (p *Pipeline[T]) Count() int {
-	defer p.hooks.fireCompletion()
-	if !p.hooks.hasElement() {
+	defer p.finalize()
+	if p.ctx == nil && !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			n := len(ss.remaining())
 			ss.idx = len(ss.data)
@@ -135,7 +170,16 @@ func (p *Pipeline[T]) Count() int {
 }
 
 func (p *Pipeline[T]) First() (T, bool) {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
+	if p.ctx != nil {
+		select {
+		case <-p.ctx.Done():
+			p.err = p.ctx.Err()
+			var zero T
+			return zero, false
+		default:
+		}
+	}
 	v, ok := p.source.Next()
 	if ok && p.hooks.hasElement() {
 		p.hooks.fireElement(v)
@@ -144,7 +188,7 @@ func (p *Pipeline[T]) First() (T, bool) {
 }
 
 func (p *Pipeline[T]) Any(pred func(T) bool) bool {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	return foldWhile(p, false, func(_ bool, v T) (bool, bool) {
 		if pred(v) {
 			return true, false
@@ -154,7 +198,7 @@ func (p *Pipeline[T]) Any(pred func(T) bool) bool {
 }
 
 func (p *Pipeline[T]) All(pred func(T) bool) bool {
-	defer p.hooks.fireCompletion()
+	defer p.finalize()
 	return !foldWhile(p, false, func(_ bool, v T) (bool, bool) {
 		if !pred(v) {
 			return true, false

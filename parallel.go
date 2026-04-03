@@ -14,7 +14,9 @@ func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *P
 	items := drainSource(p.source)
 	n := len(items)
 	if n == 0 {
-		return FromSlice([]U{})
+		r := FromSlice([]U{})
+		r.ctx = p.ctx
+		return r
 	}
 
 	results := make([]U, n)
@@ -39,14 +41,18 @@ func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *P
 		}(lo, hi)
 	}
 	wg.Wait()
-	return FromSlice(results)
+	r := FromSlice(results)
+	r.ctx = p.ctx
+	return r
 }
 
 func PipeFilterParallel[T any](p *Pipeline[T], workers int, fn func(T) bool) *Pipeline[T] {
 	items := drainSource(p.source)
 	n := len(items)
 	if n == 0 {
-		return FromSlice([]T{})
+		r := FromSlice([]T{})
+		r.ctx = p.ctx
+		return r
 	}
 
 	keep := make([]bool, n)
@@ -84,14 +90,18 @@ func PipeFilterParallel[T any](p *Pipeline[T], workers int, fn func(T) bool) *Pi
 			result = append(result, v)
 		}
 	}
-	return FromSlice(result)
+	r := FromSlice(result)
+	r.ctx = p.ctx
+	return r
 }
 
 func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U, error)) *Pipeline[U] {
 	items := drainSource(p.source)
 	n := len(items)
 	if n == 0 {
-		return FromSlice([]U{})
+		r := FromSlice([]U{})
+		r.ctx = p.ctx
+		return r
 	}
 
 	vals := make([]U, n)
@@ -126,13 +136,16 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 		}
 		out = append(out, vals[i])
 	}
-	return FromSlice(out)
+	r := FromSlice(out)
+	r.ctx = p.ctx
+	return r
 }
 
 func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize int, fn func(T) U) *Pipeline[U] {
 	src := p.source
 	hooks := p.hooks
 	fireHooks := hooks.hasElement()
+	pipeCtx := p.ctx
 	outCh := make(chan U, bufSize)
 	done := make(chan struct{})
 
@@ -182,6 +195,18 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 		cancelled := false
 
 		for {
+			// Check ctx cancellation in the read loop.
+			if pipeCtx != nil {
+				select {
+				case <-pipeCtx.Done():
+					cancelled = true
+				default:
+				}
+				if cancelled {
+					break
+				}
+			}
+
 			v, ok := src.Next()
 			if !ok {
 				break
@@ -219,7 +244,9 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 
 	ss := &stoppableSource[U]{ch: outCh, done: done}
 	runtime.SetFinalizer(ss, (*stoppableSource[U]).stop)
-	return newPipeline[U](ss)
+	r := newPipeline[U](ss)
+	r.ctx = p.ctx
+	return r
 }
 
 type stoppableSource[T any] struct {

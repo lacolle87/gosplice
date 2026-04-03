@@ -298,6 +298,49 @@ func main() {
 
 	fmt.Printf("  Handler fired: %v, Hook fired: %v\n", handlerFired, hookFired)
 	fmt.Println("  (handler takes precedence — hooks are not called)")
+
+	// -------------------------------------------------------
+	// Example 9: WithTimeout + TimeoutHook + Err()
+	// -------------------------------------------------------
+	fmt.Println("\n--- 10. WithTimeout stops pipeline, fires TimeoutHook ---")
+
+	var timeoutCount atomic.Int64
+	var timeoutHookDuration time.Duration
+
+	// Slow transform: sleeps 5ms per element → 200 elements would take ~1s
+	slow := func(r ValidRecord) (ValidRecord, error) {
+		time.Sleep(5 * time.Millisecond)
+		r.AmountEU = float64(int(r.AmountEU*100)) / 100
+		return r, nil
+	}
+
+	input := result1[:minimum(200, len(result1))]
+
+	timeoutPipeline := gs.PipeMapErr(
+		gs.FromSlice(input).
+			WithTimeout(50*time.Millisecond).
+			WithElementHook(func(r ValidRecord) { timeoutCount.Add(1) }).
+			WithTimeoutHook(func(d time.Duration) {
+				timeoutHookDuration = d
+				fmt.Printf("  TimeoutHook fired: configured %v\n", d)
+			}).
+			WithCompletionHook(func() {
+				fmt.Printf("  CompletionHook: processed %d/%d before timeout\n",
+					timeoutCount.Load(), len(input))
+			}),
+		slow,
+	)
+
+	timeoutResult := timeoutPipeline.Collect()
+
+	fmt.Printf("  Results: %d out of %d (partial due to timeout)\n",
+		len(timeoutResult), len(input))
+	fmt.Printf("  Pipeline.Err(): %v\n", timeoutPipeline.Err())
+	fmt.Printf("  TimeoutHook received duration: %v\n", timeoutHookDuration)
+
+	if timeoutPipeline.Err() != nil && len(timeoutResult) < len(input) {
+		fmt.Println("  ✓ Pipeline stopped early, partial results returned")
+	}
 }
 
 func minimum(a, b int) int {
