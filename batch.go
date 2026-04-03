@@ -16,7 +16,7 @@ func PipeBatch[T any](p *Pipeline[T], cfg BatchConfig) *Pipeline[[]T] {
 	done := false
 
 	if cfg.MaxWait > 0 {
-		return pipeBatchWithTimeout(src, hooks, cfg, p.ctx)
+		return pipeBatchWithTimeout(src, hooks, cfg, p.ctx, p.cancel)
 	}
 
 	return &Pipeline[[]T]{
@@ -40,12 +40,13 @@ func PipeBatch[T any](p *Pipeline[T], cfg BatchConfig) *Pipeline[[]T] {
 			hooks.fireBatch(batch)
 			return batch, true
 		}},
-		hooks: newHooks[[]T](),
-		ctx:   p.ctx,
+		hooks:  newHooks[[]T](),
+		ctx:    p.ctx,
+		cancel: p.cancel,
 	}
 }
 
-func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig, ctx context.Context) *Pipeline[[]T] {
+func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig, ctx context.Context, cancel context.CancelFunc) *Pipeline[[]T] {
 	outCh := make(chan []T, 4)
 
 	go func() {
@@ -133,5 +134,6 @@ func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig
 
 	p := FromChannel(outCh)
 	p.ctx = ctx
+	p.cancel = cancel
 	return p
 }

@@ -3,6 +3,7 @@ package gosplice
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -723,4 +724,347 @@ func BenchmarkPipeMap_WithCtx_10k(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		PipeMap(FromSlice(data).WithContext(ctx), func(n int) int { return n * 2 }).Collect()
 	}
+}
+
+// ===========================================================================
+// Regression: Fix 1 — parallel ops respect context during source drain
+// ===========================================================================
+
+func TestFix1_PipeMapParallel_RespectsCtx(t *testing.T) {
+	// Pre-cancelled context + large source → must NOT drain all elements.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := FromRange(0, 1_000_000).WithContext(ctx)
+	result := PipeMapParallel(p, 4, func(n int) int { return n * 2 }).Collect()
+
+	// With pre-cancelled ctx, drainSourceCtx should stop almost immediately.
+	if len(result) >= 1_000_000 {
+		t.Fatalf("expected early stop, got all %d elements", len(result))
+	}
+}
+
+func TestFix1_PipeFilterParallel_RespectsCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := FromRange(0, 1_000_000).WithContext(ctx)
+	result := PipeFilterParallel(p, 4, func(n int) bool { return n%2 == 0 }).Collect()
+
+	if len(result) >= 500_000 {
+		t.Fatalf("expected early stop, got %d elements", len(result))
+	}
+}
+
+func TestFix1_PipeMapParallelErr_RespectsCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := FromRange(0, 1_000_000).WithContext(ctx)
+	result := PipeMapParallelErr(p, 4, func(n int) (int, error) { return n, nil }).Collect()
+
+	if len(result) >= 1_000_000 {
+		t.Fatalf("expected early stop, got all %d elements", len(result))
+	}
+}
+
+func TestFix1_PipeMapParallel_ErrPropagated(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := PipeMapParallel(
+		FromRange(0, 100_000).WithContext(ctx),
+		4,
+		func(n int) int { return n },
+	)
+	_ = p.Collect()
+
+	if !errors.Is(p.Err(), context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", p.Err())
+	}
+}
+
+func TestFix1_PipeMapParallel_TimeoutStopsDrain(t *testing.T) {
+	// Slow source with timeout — parallel must not block forever.
+	// Use funcSource that sleeps per element + generous timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	calls := int64(0)
+	p := FromFunc(func() (int, bool) {
+		n := int(atomic.AddInt64(&calls, 1))
+		time.Sleep(5 * time.Millisecond)
+		return n, true // infinite source
+	}).WithContext(ctx)
+
+	result := PipeMapParallel(p, 2, func(n int) int { return n * 10 }).Collect()
+
+	// Should have collected some elements before the 100ms timeout.
+	if len(result) == 0 {
+		t.Fatal("expected some results before timeout")
+	}
+	// But not an infinite amount.
+	if len(result) > 100 {
+		t.Fatalf("expected bounded results, got %d", len(result))
+	}
+}
+
+func TestFix1_PipeMapParallel_SliceNoCtx_Unchanged(t *testing.T) {
+	// Without context, behavior unchanged — all elements processed.
+	result := PipeMapParallel(
+		FromSlice([]int{1, 2, 3, 4, 5}),
+		4,
+		func(n int) int { return n * n },
+	).Collect()
+	assertSliceEqual(t, []int{1, 4, 9, 16, 25}, result)
+}
+
+// ===========================================================================
+// Regression: Fix 2 — stoppableSource deterministic cleanup
+// ===========================================================================
+
+func TestFix2_ParallelStream_CtxCancelsGoroutines(t *testing.T) {
+	// Infinite source + context cancellation → goroutines must exit.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	before := runtime.NumGoroutine()
+
+	p := PipeMapParallelStream(
+		FromFunc(func() (int, bool) {
+			time.Sleep(time.Millisecond)
+			return 42, true
+		}).WithContext(ctx),
+		4, 8,
+		func(n int) int { return n * 2 },
+	)
+
+	// Read a few elements then cancel.
+	got := 0
+	p.ForEach(func(v int) {
+		got++
+		if got >= 3 {
+			cancel()
+		}
+	})
+
+	// Give goroutines time to wind down.
+	time.Sleep(100 * time.Millisecond)
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+
+	after := runtime.NumGoroutine()
+	leaked := after - before
+	if leaked > 3 {
+		t.Errorf("goroutine leak: before=%d after=%d delta=%d", before, after, leaked)
+	}
+}
+
+func TestFix2_ParallelStream_TakeStopsWithCtx(t *testing.T) {
+	// Take(1) from infinite source with ctx → deterministic cleanup.
+	ctx := context.Background()
+	before := runtime.NumGoroutine()
+
+	result := PipeMapParallelStream(
+		FromFunc(func() (int, bool) {
+			time.Sleep(time.Millisecond)
+			return 7, true
+		}).WithContext(ctx),
+		2, 4,
+		func(n int) int { return n + 1 },
+	).Take(1).Collect()
+
+	if len(result) != 1 || result[0] != 8 {
+		t.Fatalf("expected [8], got %v", result)
+	}
+
+	runtime.GC()
+	time.Sleep(200 * time.Millisecond)
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+
+	after := runtime.NumGoroutine()
+	leaked := after - before
+	if leaked > 3 {
+		t.Errorf("goroutine leak: before=%d after=%d delta=%d", before, after, leaked)
+	}
+}
+
+func TestFix2_ParallelStream_NormalCompletion_StillWorks(t *testing.T) {
+	result := PipeMapParallelStream(
+		FromSlice([]int{1, 2, 3, 4, 5}),
+		2, 8,
+		func(n int) int { return n * 3 },
+	).Collect()
+	assertSliceEqual(t, []int{3, 6, 9, 12, 15}, result)
+}
+
+func TestFix2_ParallelStream_OrderPreservedWithCtx(t *testing.T) {
+	ctx := context.Background()
+	result := PipeMapParallelStream(
+		FromSlice([]int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}).WithContext(ctx),
+		4, 16,
+		func(n int) int { return n * 10 },
+	).Collect()
+	assertSliceEqual(t, []int{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}, result)
+}
+
+// ===========================================================================
+// Regression: Fix 3 — cancel propagates through non-terminal ops
+// ===========================================================================
+
+func TestFix3_CancelPropagatesThroughPipeMap(t *testing.T) {
+	// WithTimeout on the first pipeline → PipeMap → Filter → Collect
+	// finalize() on the final pipeline must call cancel from WithTimeout.
+	ch := make(chan int)
+	go func() {
+		i := 0
+		for {
+			ch <- i
+			i++
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	p := FromChannel(ch).WithTimeout(30 * time.Millisecond)
+	q := PipeMap(p, func(n int) int { return n * 2 }).Filter(func(n int) bool { return true })
+
+	result := q.Collect()
+
+	// q.finalize() should have called p.cancel, stopping the timeout context.
+	if len(result) == 0 {
+		t.Fatal("expected some results")
+	}
+	if !errors.Is(q.Err(), context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", q.Err())
+	}
+}
+
+func TestFix3_CancelPropagatesThroughPipeFlatMap(t *testing.T) {
+	ch := make(chan int)
+	go func() {
+		i := 0
+		for {
+			ch <- i
+			i++
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	p := FromChannel(ch).WithTimeout(30 * time.Millisecond)
+	q := PipeFlatMap(p, func(n int) []int { return []int{n, n} })
+
+	result := q.Collect()
+	if len(result) == 0 {
+		t.Fatal("expected some results")
+	}
+	if !errors.Is(q.Err(), context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", q.Err())
+	}
+}
+
+func TestFix3_CancelPropagatesThroughPipeChunk(t *testing.T) {
+	ch := make(chan int)
+	go func() {
+		i := 0
+		for {
+			ch <- i
+			i++
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	p := FromChannel(ch).WithTimeout(30 * time.Millisecond)
+	q := PipeChunk(p, 3)
+
+	result := q.Collect()
+	if len(result) == 0 {
+		t.Fatal("expected some chunks")
+	}
+	if !errors.Is(q.Err(), context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", q.Err())
+	}
+}
+
+func TestFix3_CancelPropagatesThroughPipeBatch(t *testing.T) {
+	ch := make(chan int)
+	go func() {
+		i := 0
+		for {
+			ch <- i
+			i++
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	p := FromChannel(ch).WithTimeout(30 * time.Millisecond)
+	q := PipeBatch(p, BatchConfig{Size: 3})
+
+	result := q.Collect()
+	if len(result) == 0 {
+		t.Fatal("expected some batches")
+	}
+	if !errors.Is(q.Err(), context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", q.Err())
+	}
+}
+
+func TestFix3_CancelPropagatesThroughPipeDistinct(t *testing.T) {
+	ch := make(chan int)
+	go func() {
+		i := 0
+		for {
+			ch <- i % 50 // limited unique values
+			i++
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	p := FromChannel(ch).WithTimeout(30 * time.Millisecond)
+	q := PipeDistinct(p)
+
+	result := q.Collect()
+	if len(result) == 0 {
+		t.Fatal("expected some results")
+	}
+	if !errors.Is(q.Err(), context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", q.Err())
+	}
+}
+
+func TestFix3_WithTimeout_NoCancel_Leak(t *testing.T) {
+	// Ensure WithTimeout's cancel is called even when the pipeline
+	// goes through PipeMap → Collect (cancel lives on q, not p).
+	leaked := false
+	done := make(chan struct{})
+
+	go func() {
+		p := FromSlice([]int{1, 2, 3}).WithTimeout(10 * time.Second)
+		q := PipeMap(p, func(n int) int { return n })
+		_ = q.Collect()
+		// After Collect, finalize must have called cancel.
+		// If cancel wasn't called, the 10s timer goroutine leaks.
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// ok
+	case <-time.After(2 * time.Second):
+		leaked = true
+	}
+
+	if leaked {
+		t.Fatal("pipeline did not finalize — cancel was not propagated")
+	}
+}
+
+func TestFix3_MultipleFinalize_Safe(t *testing.T) {
+	// cancel is idempotent — calling finalize on multiple derived pipelines is safe.
+	p := FromSlice([]int{1, 2, 3}).WithTimeout(5 * time.Second)
+	q := PipeMap(p, func(n int) int { return n * 2 })
+	r := q.Filter(func(n int) bool { return n > 2 })
+
+	result := r.Collect()
+	assertSliceEqual(t, []int{4, 6}, result)
+	// No panic from double cancel.
 }

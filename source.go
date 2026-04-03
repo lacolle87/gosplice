@@ -186,3 +186,46 @@ func drainSource[T any](src Source[T]) []T {
 		items = append(items, v)
 	}
 }
+
+func drainSourceCtx[T any](src Source[T], ctx context.Context) ([]T, bool) {
+	if ctx == nil {
+		return drainSource(src), false
+	}
+	done := ctx.Done()
+
+	if ss, ok := src.(*sliceSource[T]); ok {
+		rem := ss.remaining()
+		ss.idx = len(ss.data)
+		result := make([]T, 0, len(rem))
+		for i, v := range rem {
+			if i&(ctxCheckInterval-1) == 0 {
+				select {
+				case <-done:
+					return result, true
+				default:
+				}
+			}
+			result = append(result, v)
+		}
+		return result, false
+	}
+
+	var items []T
+	if s, ok := src.(Sizer); ok {
+		if hint := s.SizeHint(); hint > 0 {
+			items = make([]T, 0, hint)
+		}
+	}
+	for {
+		select {
+		case <-done:
+			return items, true
+		default:
+		}
+		v, ok := src.Next()
+		if !ok {
+			return items, false
+		}
+		items = append(items, v)
+	}
+}

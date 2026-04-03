@@ -1,6 +1,7 @@
 package gosplice
 
 import (
+	"context"
 	"runtime"
 	"sync"
 )
@@ -10,13 +11,20 @@ type indexed[U any] struct {
 	v U
 }
 
+func parallelResult[T any, U any](p *Pipeline[T], data []U, cancelled bool) *Pipeline[U] {
+	r := FromSlice(data)
+	r.cancel = p.cancel
+	if cancelled {
+		r.err = p.ctx.Err()
+	}
+	return r
+}
+
 func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *Pipeline[U] {
-	items := drainSource(p.source)
+	items, cancelled := drainSourceCtx(p.source, p.ctx)
 	n := len(items)
 	if n == 0 {
-		r := FromSlice([]U{})
-		r.ctx = p.ctx
-		return r
+		return parallelResult[T, U](p, []U{}, cancelled)
 	}
 
 	results := make([]U, n)
@@ -41,18 +49,14 @@ func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *P
 		}(lo, hi)
 	}
 	wg.Wait()
-	r := FromSlice(results)
-	r.ctx = p.ctx
-	return r
+	return parallelResult[T, U](p, results, cancelled)
 }
 
 func PipeFilterParallel[T any](p *Pipeline[T], workers int, fn func(T) bool) *Pipeline[T] {
-	items := drainSource(p.source)
+	items, cancelled := drainSourceCtx(p.source, p.ctx)
 	n := len(items)
 	if n == 0 {
-		r := FromSlice([]T{})
-		r.ctx = p.ctx
-		return r
+		return parallelResult[T, T](p, []T{}, cancelled)
 	}
 
 	keep := make([]bool, n)
@@ -90,18 +94,14 @@ func PipeFilterParallel[T any](p *Pipeline[T], workers int, fn func(T) bool) *Pi
 			result = append(result, v)
 		}
 	}
-	r := FromSlice(result)
-	r.ctx = p.ctx
-	return r
+	return parallelResult[T, T](p, result, cancelled)
 }
 
 func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U, error)) *Pipeline[U] {
-	items := drainSource(p.source)
+	items, cancelled := drainSourceCtx(p.source, p.ctx)
 	n := len(items)
 	if n == 0 {
-		r := FromSlice([]U{})
-		r.ctx = p.ctx
-		return r
+		return parallelResult[T, U](p, []U{}, cancelled)
 	}
 
 	vals := make([]U, n)
@@ -136,9 +136,7 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 		}
 		out = append(out, vals[i])
 	}
-	r := FromSlice(out)
-	r.ctx = p.ctx
-	return r
+	return parallelResult[T, U](p, out, cancelled)
 }
 
 func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize int, fn func(T) U) *Pipeline[U] {
@@ -149,11 +147,26 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 	outCh := make(chan U, bufSize)
 	done := make(chan struct{})
 
+	var mergedCtx context.Context
+	var mergedCancel context.CancelFunc
+	if pipeCtx != nil {
+		mergedCtx, mergedCancel = context.WithCancel(pipeCtx)
+	} else {
+		mergedCtx, mergedCancel = context.WithCancel(context.Background())
+	}
+
 	go func() {
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, workers)
-
 		resultCh := make(chan indexed[U], workers)
+
+		go func() {
+			select {
+			case <-done:
+				mergedCancel()
+			case <-mergedCtx.Done():
+			}
+		}()
 
 		senderDone := make(chan struct{})
 		go func() {
@@ -171,7 +184,7 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 					nextOut++
 					select {
 					case outCh <- v:
-					case <-done:
+					case <-mergedCtx.Done():
 						return
 					}
 				}
@@ -185,26 +198,18 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 				nextOut++
 				select {
 				case outCh <- v:
-				case <-done:
+				case <-mergedCtx.Done():
 					return
 				}
 			}
 		}()
 
 		idx := 0
-		cancelled := false
-
 		for {
-			// Check ctx cancellation in the read loop.
-			if pipeCtx != nil {
-				select {
-				case <-pipeCtx.Done():
-					cancelled = true
-				default:
-				}
-				if cancelled {
-					break
-				}
+			select {
+			case <-mergedCtx.Done():
+				goto cleanup
+			default:
 			}
 
 			v, ok := src.Next()
@@ -219,11 +224,8 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 
 			select {
 			case sem <- struct{}{}:
-			case <-done:
-				cancelled = true
-			}
-			if cancelled {
-				break
+			case <-mergedCtx.Done():
+				goto cleanup
 			}
 			wg.Add(1)
 			go func(item T, i int) {
@@ -231,31 +233,48 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 				result := fn(item)
 				select {
 				case resultCh <- indexed[U]{i: i, v: result}:
-				case <-done:
+				case <-mergedCtx.Done():
 				}
 			}(v, myIdx)
 		}
 
+	cleanup:
 		wg.Wait()
 		close(resultCh)
 		<-senderDone
 		close(outCh)
 	}()
 
-	ss := &stoppableSource[U]{ch: outCh, done: done}
+	ss := &stoppableSource[U]{ch: outCh, done: done, ctx: mergedCtx, cancelFn: mergedCancel}
 	runtime.SetFinalizer(ss, (*stoppableSource[U]).stop)
 	r := newPipeline[U](ss)
 	r.ctx = p.ctx
+	r.cancel = p.cancel
 	return r
 }
 
 type stoppableSource[T any] struct {
-	ch   <-chan T
-	done chan struct{}
-	once sync.Once
+	ch       <-chan T
+	done     chan struct{}
+	ctx      context.Context
+	cancelFn context.CancelFunc
+	once     sync.Once
 }
 
 func (s *stoppableSource[T]) Next() (T, bool) {
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			s.stop()
+			var zero T
+			return zero, false
+		case v, ok := <-s.ch:
+			if !ok {
+				s.stop()
+			}
+			return v, ok
+		}
+	}
 	v, ok := <-s.ch
 	if !ok {
 		s.stop()
@@ -264,5 +283,10 @@ func (s *stoppableSource[T]) Next() (T, bool) {
 }
 
 func (s *stoppableSource[T]) stop() {
-	s.once.Do(func() { close(s.done) })
+	s.once.Do(func() {
+		close(s.done)
+		if s.cancelFn != nil {
+			s.cancelFn()
+		}
+	})
 }

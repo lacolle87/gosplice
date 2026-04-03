@@ -22,6 +22,9 @@ func (p *Pipeline[T]) WithContext(ctx context.Context) *Pipeline[T] {
 	return p
 }
 
+// Err returns the error that caused the pipeline to stop early.
+// Returns nil if the pipeline completed normally.
+// Follows the bufio.Scanner pattern — check after a terminal call.
 func (p *Pipeline[T]) Err() error {
 	return p.err
 }
@@ -74,19 +77,19 @@ func (p *Pipeline[T]) WithTimeout(d time.Duration) *Pipeline[T] {
 }
 
 func (p *Pipeline[T]) Filter(fn func(T) bool) *Pipeline[T] {
-	return &Pipeline[T]{source: &filterSource[T]{inner: p.source, pred: fn}, hooks: p.hooks, ctx: p.ctx}
+	return &Pipeline[T]{source: &filterSource[T]{inner: p.source, pred: fn}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
 }
 
 func (p *Pipeline[T]) Take(n int) *Pipeline[T] {
-	return &Pipeline[T]{source: &takeSource[T]{inner: p.source, n: n}, hooks: p.hooks, ctx: p.ctx}
+	return &Pipeline[T]{source: &takeSource[T]{inner: p.source, n: n}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
 }
 
 func (p *Pipeline[T]) Skip(n int) *Pipeline[T] {
-	return &Pipeline[T]{source: &skipSource[T]{inner: p.source, n: n}, hooks: p.hooks, ctx: p.ctx}
+	return &Pipeline[T]{source: &skipSource[T]{inner: p.source, n: n}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
 }
 
 func (p *Pipeline[T]) Peek(fn func(T)) *Pipeline[T] {
-	return &Pipeline[T]{source: &peekSource[T]{inner: p.source, fn: fn}, hooks: p.hooks, ctx: p.ctx}
+	return &Pipeline[T]{source: &peekSource[T]{inner: p.source, fn: fn}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
 }
 
 // finalize runs completion hooks and releases context resources.
