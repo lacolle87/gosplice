@@ -1,6 +1,6 @@
 # GoSplice
 
-Go library for working with slices, streams, and data pipelines. Type-safe generics, lazy evaluation, parallel processing, configurable error handling.
+Go library for working with slices, streams, and data pipelines. Type-safe generics, lazy evaluation, parallel processing, configurable error handling, context-aware cancellation.
 
 Use the whole pipeline or pick the parts you need — standalone slice functions, streaming I/O, hooks, parallel workers. Each piece works independently.
 
@@ -26,7 +26,7 @@ GoSplice is not an all-or-nothing framework. You can use it at three levels:
 doubled := gs.Map(nums, func(n int) int { return n * 2 })
 evens := gs.Filter(users, func(u User) bool { return u.Active })
 total := gs.Reduce(orders, 0.0, func(sum float64, o Order) float64 {
-    return sum + o.Price
+return sum + o.Price
 })
 ```
 
@@ -34,19 +34,22 @@ total := gs.Reduce(orders, 0.0, func(sum float64, o Order) float64 {
 
 ```go
 names := gs.PipeMap(
-    gs.FromSlice(users).
-        Filter(func(u User) bool { return u.Active }).
-        Filter(func(u User) bool { return u.Score >= 70 }),
-    func(u User) string { return u.Name },
+gs.FromSlice(users).
+Filter(func(u User) bool { return u.Active }).
+Filter(func(u User) bool { return u.Score >= 70 }),
+func(u User) string { return u.Name },
 ).Collect()
 ```
 
-**Level 3 — Pipelines with hooks, error handling, parallelism, and I/O.** For ETL workflows, data processing jobs, streaming.
+**Level 3 — Pipelines with hooks, error handling, parallelism, context, and I/O.** For ETL workflows, data processing jobs, streaming.
 
 ```go
-gs.FromChannel(recordsCh).
-    WithErrorHandler(gs.RetryHandler[Record](3, 100*time.Millisecond)).
-    WithCompletionHook(func() { log.Println("done") })
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+gs.FromChannelCtx(ctx, recordsCh).
+WithErrorHandler(gs.RetryHandler[Record](3, 100*time.Millisecond)).
+WithCompletionHook(func() { log.Println("done") })
 // ...process and write to output
 ```
 
@@ -76,14 +79,14 @@ total := gs.Reduce(nums, 0, func(acc, n int) int { return acc + n })
 
 // Build a map from a slice
 index := gs.Reduce(users, make(map[int]User), func(m map[int]User, u User) map[int]User {
-    m[u.ID] = u
-    return m
+m[u.ID] = u
+return m
 })
 
 // Concatenate with separator
 csv := gs.Reduce(names, "", func(acc, name string) string {
-    if acc != "" { acc += "," }
-    return acc + name
+if acc != "" { acc += "," }
+return acc + name
 })
 ```
 
@@ -136,11 +139,12 @@ Lazy, composable chains of operations. Nothing runs until you call a terminal.
 ### Sources
 
 ```go
-gs.FromSlice(data)                    // in-memory slice
-gs.FromChannel(ch)                    // Go channel (streaming)
-gs.FromReader(file)                   // io.Reader, line by line
-gs.FromFunc(func() (T, bool) {...})   // custom generator
-gs.FromRange(0, 1000)                 // integer range
+gs.FromSlice(data)                          // in-memory slice
+gs.FromChannel(ch)                          // Go channel (streaming)
+gs.FromChannelCtx(ctx, ch)                  // context-aware channel read
+gs.FromReader(file)                         // io.Reader, line by line
+gs.FromFunc(func() (T, bool) {...})         // custom generator
+gs.FromRange(0, 1000)                       // integer range
 ```
 
 ### Operations
@@ -186,7 +190,7 @@ sum := pipeline.Reduce(0, func(acc int, r Record) int { return acc + r.Value })
 
 // Cross-type reduce (different accumulator and element types)
 total := gs.PipeReduce(pipeline, 0.0, func(sum float64, o Order) float64 {
-    return sum + o.Price
+return sum + o.Price
 })
 ```
 
@@ -222,7 +226,7 @@ p := gs.FromSlice(users).Filter(func(u User) bool { return u.Active })
 go gs.PipeMap(p, func(u User) string { return u.Name }).ToChannel(ch)
 
 for name := range ch {
-    fmt.Println(name)
+fmt.Println(name)
 }
 ```
 
@@ -235,13 +239,83 @@ file, _ := os.Create("output.csv")
 defer file.Close()
 
 err := gs.ToWriterString(
-    gs.FromSlice(records).Filter(func(r Record) bool { return r.Valid }),
-    file,
-    func(r Record) string {
-        return fmt.Sprintf("%s,%d,%f\n", r.Name, r.ID, r.Score)
-    },
+gs.FromSlice(records).Filter(func(r Record) bool { return r.Valid }),
+file,
+func(r Record) string {
+return fmt.Sprintf("%s,%d,%f\n", r.Name, r.ID, r.Score)
+},
 )
 ```
+
+---
+
+## Context and cancellation
+
+Pipelines support `context.Context` for cancellation, timeouts, and deadline control. When no context is attached, there is zero overhead — the same code paths and benchmarks as before.
+
+### WithContext
+
+Attach a context to any pipeline. When cancelled, iteration stops and `Err()` returns the reason.
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+p := gs.FromChannel(ch).WithContext(ctx)
+results := p.Collect()
+
+if err := p.Err(); err != nil {
+log.Printf("pipeline stopped: %v", err)
+}
+```
+
+### WithTimeout
+
+Creates a deadline-scoped pipeline. Fires `TimeoutHook` on expiration.
+
+```go
+p := gs.FromChannel(tickStream).
+WithTimeout(5 * time.Second).
+WithTimeoutHook(func(d time.Duration) {
+log.Printf("pipeline timed out after %v", d)
+})
+
+results := p.Collect()
+if errors.Is(p.Err(), context.DeadlineExceeded) {
+// partial results are still available
+}
+```
+
+### FromChannelCtx
+
+Context-aware channel source — stops reading immediately when ctx is cancelled, even if the channel is not closed.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+
+p := gs.FromChannelCtx(ctx, eventStream)
+p.ForEach(func(e Event) { process(e) })
+```
+
+### Err()
+
+Follows the `bufio.Scanner` pattern — check after any terminal call:
+
+```go
+p := gs.FromChannel(ch).WithContext(ctx)
+p.ForEach(process)
+
+if err := p.Err(); err != nil {
+// context.Canceled or context.DeadlineExceeded
+}
+```
+
+### Zero overhead guarantee
+
+When `ctx` is nil (default), the pipeline takes the exact same code paths as before context support was added. No extra allocations, no select statements, no channel reads. Benchmarks confirm identical performance.
+
+Context propagates automatically through all pipeline stages: `PipeMap`, `PipeFlatMap`, `PipeMapErr`, `PipeDistinct`, `PipeChunk`, `PipeWindow`, `PipeBatch`, `Filter`, `Take`, `Skip`, `Peek`, and all parallel operations.
 
 ---
 
@@ -255,7 +329,7 @@ Old-style hooks run on every error but don't affect the pipeline flow. The eleme
 
 ```go
 pipeline.WithErrorHook(func(err error, elem Record) {
-    log.Printf("failed: %v on %v", err, elem.ID)
+log.Printf("failed: %v on %v", err, elem.ID)
 })
 ```
 
@@ -266,19 +340,19 @@ Error handlers decide what happens: skip the element, retry the operation, or ab
 ```go
 type ErrorAction int
 const (
-    Skip  ErrorAction // drop element, continue
-    Retry             // re-run the operation
-    Abort             // stop the pipeline
+Skip  ErrorAction // drop element, continue
+Retry             // re-run the operation
+Abort             // stop the pipeline
 )
 ```
 
 ```go
 pipeline.WithErrorHandler(func(err error, elem Record, attempt int) gs.ErrorAction {
-    if attempt >= 3 {
-        return gs.Skip
-    }
-    time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
-    return gs.Retry
+if attempt >= 3 {
+return gs.Skip
+}
+time.Sleep(time.Duration(attempt) * 100 * time.Millisecond)
+return gs.Retry
 })
 ```
 
@@ -308,11 +382,11 @@ var errCount atomic.Int64
 var errs []error
 
 pipeline.
-    WithElementHook(gs.CountElements[Record](&elemCount)).
-    WithErrorHook(gs.CountErrors[Record](&errCount)).
-    WithErrorHook(gs.CollectErrors[Record](&errs)).
-    WithErrorHook(gs.LogErrorsTo[Record](os.Stderr)).
-    WithBatchHook(gs.CountBatches[Record](&batchCount))
+WithElementHook(gs.CountElements[Record](&elemCount)).
+WithErrorHook(gs.CountErrors[Record](&errCount)).
+WithErrorHook(gs.CollectErrors[Record](&errs)).
+WithErrorHook(gs.LogErrorsTo[Record](os.Stderr)).
+WithBatchHook(gs.CountBatches[Record](&batchCount))
 ```
 
 When both an error handler and error hooks are set, the handler takes precedence. Hooks are not called.
@@ -325,15 +399,15 @@ Hooks provide observability and lifecycle callbacks without modifying pipeline l
 
 ```go
 pipeline.
-    WithElementHook(func(r Record) {
-        metrics.Inc("records.processed")
-    }).
-    WithBatchHook(func(batch []Record) {
-        db.BulkInsert(batch)
-    }).
-    WithCompletionHook(func() {
-        log.Println("pipeline finished")
-    })
+WithElementHook(func(r Record) {
+metrics.Inc("records.processed")
+}).
+WithBatchHook(func(batch []Record) {
+db.BulkInsert(batch)
+}).
+WithCompletionHook(func() {
+log.Println("pipeline finished")
+})
 ```
 
 Multiple hooks of the same type compose — they fire in registration order. Hooks work with all terminals: Collect, Reduce, ForEach, Count, First, Any, All, ToChannel, WriteTo.
@@ -353,7 +427,7 @@ results := gs.PipeFilterParallel(pipeline, 4, expensivePredicate).Collect()
 
 // Parallel map with error handling
 results := gs.PipeMapParallelErr(pipeline, 4, func(r Record) (Output, error) {
-    return callExternalAPI(r)
+return callExternalAPI(r)
 }).Collect()
 
 // Streaming parallel — for channels/readers, bounded memory, order-preserving
@@ -372,8 +446,8 @@ batches := gs.PipeBatch(pipeline, gs.BatchConfig{Size: 100}).Collect()
 
 // With timeout — for streaming sources, emit partial batch if timeout expires
 batches := gs.PipeBatch(channelPipeline, gs.BatchConfig{
-    Size:    100,
-    MaxWait: 500 * time.Millisecond,
+Size:    100,
+MaxWait: 500 * time.Millisecond,
 })
 ```
 
@@ -383,23 +457,23 @@ batches := gs.PipeBatch(channelPipeline, gs.BatchConfig{
 
 ```go
 orders := []Order{
-    {1, "Alice", 150.0, "completed"},
-    {2, "Bob", 0, "failed"},
-    {3, "Charlie", 320.0, "completed"},
-    {4, "Diana", 89.0, "completed"},
-    {5, "Eve", 450.0, "pending"},
+{1, "Alice", 150.0, "completed"},
+{2, "Bob", 0, "failed"},
+{3, "Charlie", 320.0, "completed"},
+{4, "Diana", 89.0, "completed"},
+{5, "Eve", 450.0, "pending"},
 }
 
 var processed atomic.Int64
 
 results := gs.PipeMap(
-    gs.FromSlice(orders).
-        WithElementHook(gs.CountElements[Order](&processed)).
-        Filter(func(o Order) bool { return o.Status == "completed" }).
-        Filter(func(o Order) bool { return o.Amount > 100 }),
-    func(o Order) string {
-        return fmt.Sprintf("%s: $%.2f", o.Customer, o.Amount)
-    },
+gs.FromSlice(orders).
+WithElementHook(gs.CountElements[Order](&processed)).
+Filter(func(o Order) bool { return o.Status == "completed" }).
+Filter(func(o Order) bool { return o.Amount > 100 }),
+func(o Order) string {
+return fmt.Sprintf("%s: $%.2f", o.Customer, o.Amount)
+},
 ).Collect()
 // ["Alice: $150.00", "Charlie: $320.00"]
 
@@ -415,116 +489,84 @@ Four working examples in [`examples/`](examples/).
 
 ### Streaming ETL: Star Wars API → [`examples/swapi/`](examples/swapi/main.go)
 
-Streams characters from a paginated HTTP API, collects through a pipeline with progress hooks, then runs analytics: distributions, grouping, extremes, filtered output to stdout.
+Streams characters from a paginated HTTP API with context timeout, collects through a pipeline with progress hooks, then runs analytics: distributions, grouping, extremes, filtered output to stdout.
 
 ```go
-people := gs.FromChannel(characterChannel()).
-    WithElementHook(gs.CountElements[Person](&fetched)).
-    WithCompletionHook(func() { log.Printf("done: %d in %v", fetched.Load(), time.Since(start)) }).
-    Collect()
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+defer cancel()
 
-stats := gs.Reduce(people, Stats{}, func(s Stats, p Person) Stats { ... })
-heightDist := gs.CountBy(gs.FromSlice(people), heightBucket)
-tallest, _ := gs.MaxBy(gs.FromSlice(people).Filter(...), func(p Person) int { return p.GetHeight() })
-byHeight := gs.GroupBy(gs.FromSlice(people), heightBucket)
-_ = gs.ToWriterString(gs.FromSlice(people).Filter(...), os.Stdout, formatPerson)
+people := gs.FromChannelCtx(ctx, streamPages(url, client)).
+WithElementHook(gs.CountElements[Person](&fetched)).
+WithTimeoutHook(func(d time.Duration) { log.Printf("timed out after %v", d) }).
+WithCompletionHook(func() { log.Printf("done: %d in %v", fetched.Load(), time.Since(start)) }).
+Collect()
+
+if p.Err() != nil {
+log.Printf("stopped early: %v (got %d characters)", p.Err(), len(people))
+}
 ```
 
-Uses: `FromChannel`, `CountElements`, hooks, `Collect`, `Reduce`, `CountBy`, `MaxBy`, `GroupBy`, `Map`, `Filter`, `PipeMap`, `ToWriterString`.
+Uses: `FromChannelCtx`, `WithContext`, `Err`, `CountElements`, hooks, `Collect`, `Reduce`, `CountBy`, `MaxBy`, `GroupBy`, `Map`, `Filter`, `PipeMap`, `ToWriterString`.
 
-### Market data: tick stream → candles → [`examples/quotes/`](examples/quotes/main.go)
+### Market data: tick stream → candles → indicators → [`examples/quotes/`](examples/quotes/main.go)
 
-Generates price ticks, batches them into 1-minute candles, analyzes the session: direction distribution, volume by trend, 3-candle streak detection via sliding windows.
+Generates price ticks with context timeout, batches into 1-minute candles, computes technical indicators (SMA, EMA, RSI, Bollinger Bands, VWAP) using gosplice pipelines, analyzes the session.
 
 ```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
 candles := gs.PipeMap(
-    gs.PipeBatch(gs.FromChannel(generateTicks(600)), gs.BatchConfig{Size: 60}),
-    buildCandle,  // buildCandle uses gs.Reduce internally
+gs.PipeBatch(gs.FromChannelCtx(ctx, generateTicks()), gs.BatchConfig{Size: 60}),
+buildCandle,
 ).Collect()
 
-stats := gs.Reduce(candles, SessionStats{...}, func(s SessionStats, c Candle) SessionStats { ... })
-dirDist := gs.CountBy(gs.FromSlice(candles), classifyDirection)
-bullVol := gs.SumBy(gs.FromSlice(candles).Filter(Candle.IsBullish), func(c Candle) int { return c.Volume })
+// SMA via PipeWindow + PipeMap
+sma := gs.PipeMap(
+gs.PipeWindow(gs.FromSlice(closes), period, 1),
+func(w []float64) float64 { return gs.Reduce(w, 0.0, add) / float64(len(w)) },
+).Collect()
 
-windows := gs.PipeWindow(gs.FromSlice(candles), 3, 1).Collect()
-streaks := gs.Filter(windows, func(w []Candle) bool { return gs.Every(w, Candle.IsBullish) })
+// RSI via PipeWindow + PipeReduce
+rsi := gs.PipeMap(gs.PipeWindow(gs.FromSlice(closes), 15, 1), calcRSI).Collect()
 ```
 
-Uses: `FromChannel`, `PipeBatch`, `PipeMap`, `CountElements`, `Collect`, `Reduce`, `CountBy`, `SumBy`, `MaxBy`, `MinBy`, `Filter`, `PipeWindow`, `Every`, `ToWriterString`.
+Uses: `FromChannelCtx`, `WithContext`, `WithTimeout`, `Err`, `PipeBatch`, `PipeMap`, `PipeWindow`, `PipeReduce`, `CountElements`, `Collect`, `Reduce`, `CountBy`, `SumBy`, `MaxBy`, `MinBy`, `Filter`, `Every`, `ToWriterString`.
 
 ### Data analytics: real estate reports → [`examples/realestate/`](examples/realestate/main.go)
 
 Generates 500 property listings (some with bad data), runs them through a validation + labeling pipeline with error tracking, then produces a full market report: district breakdown, agent leaderboard, buyer opportunities, stale listing alerts.
 
 ```go
-// Main pipeline: validate → label → collect (bad data skipped via PipeMapErr)
-var processed atomic.Int64
-var badData []error
-
 labeled := gs.PipeMapErr(
-    gs.FromSlice(listings).
-        WithElementHook(gs.CountElements[Property](&processed)).
-        WithErrorHook(gs.CollectErrors[Property](&badData)),
-    func(p Property) (LabeledProperty, error) { return labelProperty(p, avgPriceM2) },
+gs.FromSlice(listings).
+WithElementHook(gs.CountElements[Property](&processed)).
+WithErrorHook(gs.CollectErrors[Property](&badData)),
+func(p Property) (LabeledProperty, error) { return labelProperty(p, avgPriceM2) },
 ).Collect()
 
-// Analytics pipelines
 byDistrict := gs.GroupBy(gs.FromSlice(labeled), func(lp LabeledProperty) string { return lp.Property.District })
-for district, group := range byDistrict {
-    summary := gs.Reduce(group, DistrictSummary{...}, aggregateFn)
-}
-
 sold, active := gs.Partition(gs.FromSlice(labeled), isSold)
 fastest, _ := gs.MinBy(gs.FromSlice(sold), func(lp LabeledProperty) int { return lp.DaysOn })
-
-// Chained Filter → ForEach for stale alerts
-gs.FromSlice(active).
-    Filter(func(lp LabeledProperty) bool { return hasLabel(lp, "stale") }).
-    ForEach(func(lp LabeledProperty) { fmt.Printf("  #%d needs price cut\n", lp.Property.ID) })
-
-// Chained Filter → ToWriterString for buyer opportunities
-_ = gs.ToWriterString(
-    gs.FromSlice(active).Filter(isUnderpriced).Filter(highScore),
-    os.Stdout, formatOpportunity,
-)
 ```
 
 Uses: `FromSlice`, `PipeMapErr`, `CollectErrors`, `CountElements`, `Collect`, `Filter` (pipeline), `ForEach`, `Count`, `Map`, `FlatMap`, `Some`, `Unique`, `Reduce`, `SumBy`, `MaxBy`, `MinBy`, `CountBy`, `GroupBy`, `Partition`, `ToWriterString`.
 
 ### Hooks showcase: validation pipeline → [`examples/hooks/`](examples/hooks/main.go)
 
-Focused purely on the hooks system. Processes 200 records with bad data through 9 scenarios: observability hooks (count, log, collect errors), error handlers (skip, abort, retry with backoff, retry-then-abort), batch hooks, hook composition, and handler vs hook precedence.
+Focused purely on the hooks system. Processes 200 records with bad data through 10 scenarios: observability hooks, error handlers, retry with backoff, batch hooks, hook composition, handler vs hook precedence, and context timeout with hook.
 
 ```go
-// Observability: count + collect + log errors in one pipeline
-labeled := gs.PipeMapErr(
-    gs.FromSlice(records).
-        WithElementHook(gs.CountElements[RawRecord](&elemCount)).
-        WithErrorHook(gs.CountErrors[RawRecord](&errCount)).
-        WithErrorHook(gs.CollectErrors[RawRecord](&collectedErrors)).
-        WithErrorHook(gs.LogErrorsTo[RawRecord](os.Stderr)).
-        WithCompletionHook(func() { fmt.Printf("done: %d processed, %d errors\n", ...) }),
-    validate,
-).Collect()
-
-// Retry with backoff on a flaky service
-result := gs.PipeMapErr(
-    gs.FromSlice(data).
-        WithErrorHandler(gs.RetryHandler[ValidRecord](3, 10*time.Millisecond)).
-        WithMaxRetries(5),
-    callFlakyService,
-).Collect()
-
-// Batch hooks — fire per batch
-gs.PipeBatch(
-    gs.FromSlice(data).WithBatchHook(func(batch []ValidRecord) {
-        fmt.Printf("batch #%d: %d items\n", count, len(batch))
-    }),
-    gs.BatchConfig{Size: 25},
+// Timeout hook — pipeline stops after deadline
+gs.PipeMapErr(
+gs.FromSlice(data).
+WithTimeout(50 * time.Millisecond).
+WithTimeoutHook(func(d time.Duration) { fmt.Printf("timed out after %v\n", d) }),
+slowTransform,
 ).Collect()
 ```
 
-Uses: `CountElements`, `CountErrors`, `CollectErrors`, `LogErrorsTo`, `CountBatches`, `WithElementHook`, `WithErrorHook`, `WithErrorHandler`, `WithCompletionHook`, `WithMaxRetries`, `SkipOnError`, `AbortOnError`, `RetryHandler`, `RetryThenAbort`, `PipeMapErr`, `PipeBatch`.
+Uses: `CountElements`, `CountErrors`, `CollectErrors`, `LogErrorsTo`, `CountBatches`, `WithElementHook`, `WithErrorHook`, `WithErrorHandler`, `WithCompletionHook`, `WithMaxRetries`, `WithTimeout`, `WithTimeoutHook`, `Err`, `SkipOnError`, `AbortOnError`, `RetryHandler`, `RetryThenAbort`, `PipeMapErr`, `PipeBatch`.
 
 ## Testing
 
@@ -538,22 +580,23 @@ go test -race ./...               # race condition detection
 
 ```
 gosplice/
-├── source.go       Source interface, adapters (FromSlice, FromChannel, FromReader, FromFunc, FromRange)
+├── source.go       Source interface, adapters (FromSlice, FromChannel, FromChannelCtx, FromReader, FromFunc, FromRange)
 ├── stage.go        Pipeline stage types (filter, map, flatMap, chunk, window, distinct...)
-├── pipeline.go     Pipeline[T] struct, chainable operations, terminal operations
+├── pipeline.go     Pipeline[T] struct, WithContext, WithTimeout, Err, chainable operations, terminals
+├── iter.go         Core iteration primitives (drain, fold, foldWhile) with ctx-aware branches
 ├── transform.go    Type-changing functions (PipeMap, PipeFlatMap, PipeReduce...)
 ├── aggregate.go    Aggregations (GroupBy, CountBy, SumBy, MaxBy, MinBy, Partition)
 ├── parallel.go     Parallel operations (PipeMapParallel, PipeFilterParallel...)
-├── batch.go        Batching with size and timeout
+├── batch.go        Batching with size and timeout, context-aware cancellation
 ├── sink.go         Output adapters (ToChannel, ToWriter, ToWriterString)
 ├── hooks.go        Hook types, ErrorAction, error handling dispatch
 ├── hookfn.go       Ready-made hooks (RetryHandler, CountElements, LogErrorsTo...)
 ├── slice.go        Standalone slice functions (Map, Filter, Reduce, Unique...)
 └── examples/
-    ├── swapi/        Streaming ETL from Star Wars API
-    ├── quotes/       Market tick stream → candle aggregation
+    ├── swapi/        Streaming ETL from Star Wars API (with context timeout)
+    ├── quotes/       Market tick stream → candles → technical indicators
     ├── realestate/   Property labeling and market analytics
-    └── hooks/        Hooks system showcase (all hook types)
+    └── hooks/        Hooks system showcase (all hook types + timeout)
 ```
 
 ## License
