@@ -90,6 +90,7 @@ func (s *chanCtxSource[T]) Next() (T, bool) {
 func FromChannelCtx[T any](ctx context.Context, ch <-chan T) *Pipeline[T] {
 	p := newPipeline[T](&chanCtxSource[T]{ch: ch, ctx: ctx})
 	p.ctx = ctx
+	p.ctxNoop = ctx != nil && ctx.Done() == nil
 	return p
 }
 
@@ -189,6 +190,11 @@ func drainSourceCtx[T any](src Source[T], ctx context.Context) ([]T, bool) {
 	if ctx == nil {
 		return drainSource(src), false
 	}
+	// Uncancelable context (Background/TODO) — skip all ctx checks.
+	if ctx.Done() == nil {
+		return drainSource(src), false
+	}
+
 	done := ctx.Done()
 
 	if ss, ok := src.(*sliceSource[T]); ok {

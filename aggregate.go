@@ -21,7 +21,7 @@ func CountBy[T any, K comparable](p *Pipeline[T], keyFn func(T) K) map[K]int {
 
 func SumBy[T any, N cmp.Ordered](p *Pipeline[T], fn func(T) N) N {
 	defer p.finalize()
-	if p.ctx == nil && !p.hooks.hasElement() {
+	if !p.ctxActive() && !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			var sum N
 			for _, v := range ss.remaining() {

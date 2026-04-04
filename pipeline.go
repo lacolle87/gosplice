@@ -11,12 +11,13 @@ type sourceWithErr interface {
 }
 
 type Pipeline[T any] struct {
-	source Source[T]
-	hooks  *Hooks[T]
-	ctx    context.Context
-	cancel context.CancelFunc
-	pErr   atomic.Pointer[error]
-	done   bool
+	source  Source[T]
+	hooks   *Hooks[T]
+	ctx     context.Context
+	cancel  context.CancelFunc
+	pErr    atomic.Pointer[error]
+	done    bool
+	ctxNoop bool // true when ctx != nil but uncancelable (Background/TODO)
 }
 
 func newPipeline[T any](src Source[T]) *Pipeline[T] {
@@ -25,7 +26,14 @@ func newPipeline[T any](src Source[T]) *Pipeline[T] {
 
 func (p *Pipeline[T]) WithContext(ctx context.Context) *Pipeline[T] {
 	p.ctx = ctx
+	p.ctxNoop = ctx != nil && ctx.Done() == nil
 	return p
+}
+
+// ctxActive reports whether the pipeline has a cancelable context
+// that requires per-element checks during iteration.
+func (p *Pipeline[T]) ctxActive() bool {
+	return p.ctx != nil && !p.ctxNoop
 }
 
 func (p *Pipeline[T]) setErr(err error) {
@@ -89,23 +97,48 @@ func (p *Pipeline[T]) WithTimeout(d time.Duration) *Pipeline[T] {
 	ctx, cancel := context.WithTimeout(base, d)
 	p.ctx = ctx
 	p.cancel = cancel
+	p.ctxNoop = false // timeout context is always cancelable
 	return p
 }
 
 func (p *Pipeline[T]) Filter(fn func(T) bool) *Pipeline[T] {
-	return &Pipeline[T]{source: &filterSource[T]{inner: p.source, pred: fn}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
+	return &Pipeline[T]{
+		source:  &filterSource[T]{inner: p.source, pred: fn},
+		hooks:   p.hooks,
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
+	}
 }
 
 func (p *Pipeline[T]) Take(n int) *Pipeline[T] {
-	return &Pipeline[T]{source: &takeSource[T]{inner: p.source, n: n}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
+	return &Pipeline[T]{
+		source:  &takeSource[T]{inner: p.source, n: n},
+		hooks:   p.hooks,
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
+	}
 }
 
 func (p *Pipeline[T]) Skip(n int) *Pipeline[T] {
-	return &Pipeline[T]{source: &skipSource[T]{inner: p.source, n: n}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
+	return &Pipeline[T]{
+		source:  &skipSource[T]{inner: p.source, n: n},
+		hooks:   p.hooks,
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
+	}
 }
 
 func (p *Pipeline[T]) Peek(fn func(T)) *Pipeline[T] {
-	return &Pipeline[T]{source: &peekSource[T]{inner: p.source, fn: fn}, hooks: p.hooks, ctx: p.ctx, cancel: p.cancel}
+	return &Pipeline[T]{
+		source:  &peekSource[T]{inner: p.source, fn: fn},
+		hooks:   p.hooks,
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
+	}
 }
 
 func (p *Pipeline[T]) finalize() {
@@ -132,7 +165,7 @@ func (p *Pipeline[T]) finalize() {
 func (p *Pipeline[T]) Collect() []T {
 	defer p.finalize()
 
-	if p.ctx == nil && !p.hooks.hasElement() {
+	if !p.ctxActive() && !p.hooks.hasElement() {
 		if dc, ok := p.source.(directCollectable[T]); ok {
 			if result := dc.collectAll(); result != nil {
 				return result
@@ -162,7 +195,7 @@ func (p *Pipeline[T]) CollectTo(dst []T) []T {
 
 func (p *Pipeline[T]) Reduce(initial T, fn func(T, T) T) T {
 	defer p.finalize()
-	if p.ctx == nil && !p.hooks.hasElement() {
+	if !p.ctxActive() && !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			acc := initial
 			for _, v := range ss.remaining() {
@@ -182,7 +215,7 @@ func (p *Pipeline[T]) ForEach(fn func(T)) {
 
 func (p *Pipeline[T]) Count() int {
 	defer p.finalize()
-	if p.ctx == nil && !p.hooks.hasElement() {
+	if !p.ctxActive() && !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			n := len(ss.remaining())
 			ss.idx = len(ss.data)
@@ -194,7 +227,7 @@ func (p *Pipeline[T]) Count() int {
 
 func (p *Pipeline[T]) First() (T, bool) {
 	defer p.finalize()
-	if p.ctx != nil {
+	if p.ctxActive() {
 		select {
 		case <-p.ctx.Done():
 			p.setErr(p.ctx.Err())

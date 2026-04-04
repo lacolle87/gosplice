@@ -6,9 +6,10 @@ func PipeMap[T any, U any](p *Pipeline[T], fn func(T) U) *Pipeline[U] {
 			inner: p.source, fn: fn,
 			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 		},
-		hooks:  newHooks[U](),
-		ctx:    p.ctx,
-		cancel: p.cancel,
+		hooks:   newHooks[U](),
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
 	}
 }
 
@@ -19,9 +20,10 @@ func PipeMapErr[T any, U any](p *Pipeline[T], fn func(T) (U, error)) *Pipeline[U
 			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 			hasErr: p.hooks.hasError(), maxRetries: p.hooks.MaxRetries,
 		},
-		hooks:  newHooks[U](),
-		ctx:    p.ctx,
-		cancel: p.cancel,
+		hooks:   newHooks[U](),
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
 	}
 }
 
@@ -31,18 +33,20 @@ func PipeFlatMap[T any, U any](p *Pipeline[T], fn func(T) []U) *Pipeline[U] {
 			inner: p.source, fn: fn,
 			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 		},
-		hooks:  newHooks[U](),
-		ctx:    p.ctx,
-		cancel: p.cancel,
+		hooks:   newHooks[U](),
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
 	}
 }
 
 func PipeDistinct[T comparable](p *Pipeline[T]) *Pipeline[T] {
 	return &Pipeline[T]{
-		source: &distinctSource[T]{inner: p.source, seen: make(map[T]struct{})},
-		hooks:  p.hooks,
-		ctx:    p.ctx,
-		cancel: p.cancel,
+		source:  &distinctSource[T]{inner: p.source, seen: make(map[T]struct{})},
+		hooks:   p.hooks,
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
 	}
 }
 
@@ -52,9 +56,10 @@ func PipeChunk[T any](p *Pipeline[T], size int) *Pipeline[[]T] {
 			inner: p.source, size: size,
 			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 		},
-		hooks:  newHooks[[]T](),
-		ctx:    p.ctx,
-		cancel: p.cancel,
+		hooks:   newHooks[[]T](),
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
 	}
 }
 
@@ -64,15 +69,16 @@ func PipeWindow[T any](p *Pipeline[T], size, step int) *Pipeline[[]T] {
 			inner: p.source, size: size, step: step,
 			hooks: p.hooks, hasHooks: p.hooks.hasElement(),
 		},
-		hooks:  newHooks[[]T](),
-		ctx:    p.ctx,
-		cancel: p.cancel,
+		hooks:   newHooks[[]T](),
+		ctx:     p.ctx,
+		cancel:  p.cancel,
+		ctxNoop: p.ctxNoop,
 	}
 }
 
 func PipeReduce[T any, U any](p *Pipeline[T], init U, fn func(U, T) U) U {
 	defer p.finalize()
-	if p.ctx == nil && !p.hooks.hasElement() {
+	if !p.ctxActive() && !p.hooks.hasElement() {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			acc := init
 			for _, v := range ss.remaining() {

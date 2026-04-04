@@ -17,8 +17,8 @@ func ctxDone[T any](p *Pipeline[T]) bool {
 func drain[T any](p *Pipeline[T], fn func(T)) {
 	fireHooks := p.hooks.hasElement()
 
-	// --- ctx-aware path ---
-	if p.ctx != nil {
+	// --- ctx-aware path (only for cancelable contexts) ---
+	if p.ctxActive() {
 		if !fireHooks {
 			if ss, ok := p.source.(*sliceSource[T]); ok {
 				rem := ss.remaining()
@@ -61,7 +61,7 @@ func drain[T any](p *Pipeline[T], fn func(T)) {
 		}
 	}
 
-	// --- original zero-overhead paths (ctx == nil) ---
+	// --- original zero-overhead paths (ctx == nil OR uncancelable) ---
 	if !fireHooks {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			for _, v := range ss.remaining() {
@@ -96,8 +96,8 @@ func fold[T any, A any](p *Pipeline[T], init A, fn func(A, T) A) A {
 	fireHooks := p.hooks.hasElement()
 	acc := init
 
-	// --- ctx-aware path ---
-	if p.ctx != nil {
+	// --- ctx-aware path (only for cancelable contexts) ---
+	if p.ctxActive() {
 		if !fireHooks {
 			if ss, ok := p.source.(*sliceSource[T]); ok {
 				rem := ss.remaining()
@@ -140,7 +140,7 @@ func fold[T any, A any](p *Pipeline[T], init A, fn func(A, T) A) A {
 		}
 	}
 
-	// --- original zero-overhead paths (ctx == nil) ---
+	// --- original zero-overhead paths (ctx == nil OR uncancelable) ---
 	if !fireHooks {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			for _, v := range ss.remaining() {
@@ -175,8 +175,8 @@ func foldWhile[T any, A any](p *Pipeline[T], init A, fn func(A, T) (A, bool)) A 
 	fireHooks := p.hooks.hasElement()
 	acc := init
 
-	// --- ctx-aware path ---
-	if p.ctx != nil {
+	// --- ctx-aware path (only for cancelable contexts) ---
+	if p.ctxActive() {
 		if !fireHooks {
 			if ss, ok := p.source.(*sliceSource[T]); ok {
 				rem := ss.remaining()
@@ -232,7 +232,7 @@ func foldWhile[T any, A any](p *Pipeline[T], init A, fn func(A, T) (A, bool)) A 
 		}
 	}
 
-	// --- original zero-overhead paths (ctx == nil) ---
+	// --- original zero-overhead paths (ctx == nil OR uncancelable) ---
 	if !fireHooks {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
 			for _, v := range ss.remaining() {
