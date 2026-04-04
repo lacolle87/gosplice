@@ -16,6 +16,9 @@ func parallelResult[T any, U any](p *Pipeline[T], data []U, cancelled bool) *Pip
 	r.cancel = p.cancel
 	if cancelled {
 		r.setErr(p.ctx.Err())
+	} else {
+		r.ctx = p.ctx
+		r.ctxNoop = p.ctxNoop
 	}
 	return r
 }
@@ -139,14 +142,6 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 	return parallelResult[T, U](p, out, cancelled)
 }
 
-// PipeMapParallelStream processes elements from a streaming source in parallel
-// while preserving order. Uses bounded memory (bufSize).
-//
-// The sender goroutine uses a select-based loop (not bare for-range) so it
-// can exit promptly when mergedCtx is cancelled, instead of waiting for
-// resultCh to close. On the cancellation path, mergedCtx is already cancelled
-// (via pipeCtx propagation or the watcher goroutine), so workers and sender
-// unblock through their respective select cases.
 func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize int, fn func(T) U) *Pipeline[U] {
 	src := p.source
 	hooks := p.hooks
@@ -177,11 +172,6 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 			}
 		}()
 
-		// Sender: reads results, reorders, sends to outCh.
-		// Uses select on mergedCtx.Done() so it exits promptly on
-		// cancellation instead of blocking on a bare for-range.
-		// On normal completion, resultCh is closed after wg.Wait(),
-		// ok==false triggers the flush-and-return path.
 		senderDone := make(chan struct{})
 		go func() {
 			defer close(senderDone)
@@ -229,16 +219,17 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 
 		// Dispatch: read from source, spawn workers.
 		idx := 0
+	dispatch:
 		for {
 			select {
 			case <-mergedCtx.Done():
-				goto cleanup
+				break dispatch
 			default:
 			}
 
 			v, ok := src.Next()
 			if !ok {
-				break
+				break dispatch
 			}
 			if fireHooks {
 				hooks.fireElement(v)
@@ -249,7 +240,7 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 			select {
 			case sem <- struct{}{}:
 			case <-mergedCtx.Done():
-				goto cleanup
+				break dispatch
 			}
 			wg.Add(1)
 			go func(item T, i int) {
@@ -262,11 +253,6 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 			}(v, myIdx)
 		}
 
-	cleanup:
-		// On the cancellation path mergedCtx is already cancelled
-		// (via pipeCtx or watcher), so workers exit their send-select
-		// and wg.Wait() returns promptly. On normal completion workers
-		// finish naturally — mergedCtx is still alive, no results dropped.
 		wg.Wait()
 		close(resultCh)
 		<-senderDone
@@ -277,7 +263,14 @@ func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize in
 	runtime.SetFinalizer(ss, (*stoppableSource[U]).stop)
 	r := newPipeline[U](ss)
 	r.ctx = p.ctx
-	r.cancel = p.cancel
+
+	pCancel := p.cancel
+	r.cancel = func() {
+		mergedCancel()
+		if pCancel != nil {
+			pCancel()
+		}
+	}
 	return r
 }
 

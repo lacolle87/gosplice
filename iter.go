@@ -41,7 +41,7 @@ func drain[T any](p *Pipeline[T], fn func(T)) {
 				}
 				v, ok := src.Next()
 				if !ok {
-					ctxDone(p) // record error if ctx caused end-of-source
+					ctxDone(p)
 					return
 				}
 				p.hooks.fireElement(v)
@@ -188,7 +188,7 @@ func foldWhile[T any, A any](p *Pipeline[T], init A, fn func(A, T) (A, bool)) A 
 					var cont bool
 					acc, cont = fn(acc, v)
 					if !cont {
-						ss.idx = len(ss.data)
+						ss.idx += i + 1
 						return acc
 					}
 				}
@@ -235,11 +235,11 @@ func foldWhile[T any, A any](p *Pipeline[T], init A, fn func(A, T) (A, bool)) A 
 	// --- original zero-overhead paths (ctx == nil OR uncancelable) ---
 	if !fireHooks {
 		if ss, ok := p.source.(*sliceSource[T]); ok {
-			for _, v := range ss.remaining() {
+			for i, v := range ss.remaining() {
 				var cont bool
 				acc, cont = fn(acc, v)
 				if !cont {
-					ss.idx = len(ss.data)
+					ss.idx += i + 1
 					return acc
 				}
 			}

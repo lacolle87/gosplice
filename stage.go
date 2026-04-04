@@ -181,17 +181,18 @@ func (s *mapErrSource[T, U]) Next() (U, bool) {
 			s.hooks.fireElement(v)
 		}
 
-		result, err := s.fn(v)
-		if err == nil {
-			return result, true
-		}
-
-		if !s.hasErr {
-			continue
-		}
-
-		for attempt := 1; ; attempt++ {
-			action := s.hooks.handleError(err, v, attempt)
+		for attempt := 0; ; attempt++ {
+			if attempt >= s.maxRetries {
+				goto nextElem
+			}
+			result, err := s.fn(v)
+			if err == nil {
+				return result, true
+			}
+			if !s.hasErr {
+				goto nextElem
+			}
+			action := s.hooks.handleError(err, v, attempt+1)
 			switch action {
 			case Skip:
 				goto nextElem
@@ -199,13 +200,7 @@ func (s *mapErrSource[T, U]) Next() (U, bool) {
 				var zero U
 				return zero, false
 			case Retry:
-				if attempt >= s.maxRetries {
-					goto nextElem
-				}
-				result, err = s.fn(v)
-				if err == nil {
-					return result, true
-				}
+				// continue to next attempt
 			}
 		}
 	nextElem:

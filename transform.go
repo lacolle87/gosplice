@@ -64,6 +64,9 @@ func PipeChunk[T any](p *Pipeline[T], size int) *Pipeline[[]T] {
 }
 
 func PipeWindow[T any](p *Pipeline[T], size, step int) *Pipeline[[]T] {
+	if step < 1 {
+		step = 1
+	}
 	return &Pipeline[[]T]{
 		source: &windowSource[T]{
 			inner: p.source, size: size, step: step,

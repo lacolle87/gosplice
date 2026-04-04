@@ -1,6 +1,10 @@
 package gosplice
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 func BenchmarkPipelineFilter(b *testing.B) {
 	data := makeRange(10000)
@@ -258,6 +262,66 @@ func BenchmarkPipeMapParallelHeavy(b *testing.B) {
 			PipeMapParallel(FromSlice(data), 8, heavy).Collect()
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Parallel stream, error handling, finalize, foldWhile edge cases
+// ---------------------------------------------------------------------------
+
+func BenchmarkParallelStreamNoCtx(b *testing.B) {
+	data := makeRange(100)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PipeMapParallelStream(FromSlice(data), 4, 16,
+			func(n int) int { return n * 2 }).Collect()
+	}
+}
+
+func BenchmarkParallelStreamWithCtx(b *testing.B) {
+	data := makeRange(100)
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PipeMapParallelStream(FromSlice(data).WithContext(ctx), 4, 16,
+			func(n int) int { return n * 2 }).Collect()
+	}
+}
+
+func BenchmarkMapErrRetries(b *testing.B) {
+	data := makeRange(5)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PipeMapErr(
+			FromSlice(data).WithErrorHandler(RetryHandler[int](3, 0)).WithMaxRetries(5),
+			func(n int) (int, error) {
+				if n == 3 {
+					return 0, errors.New("fail")
+				}
+				return n, nil
+			}).Collect()
+	}
+}
+
+func BenchmarkFinalize(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		FromSlice([]int{1, 2, 3}).WithCompletionHook(func() {}).Collect()
+	}
+}
+
+func BenchmarkFoldWhileAnyEarlyExit(b *testing.B) {
+	data := makeRange(10000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		FromSlice(data).Any(func(n int) bool { return n == 9999 })
+	}
+}
+
+func BenchmarkFoldWhileAnyNoMatch(b *testing.B) {
+	data := makeRange(10000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		FromSlice(data).Any(func(n int) bool { return n < 0 })
+	}
 }
 
 func makeRange(n int) []int {

@@ -2,6 +2,7 @@ package gosplice
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -11,13 +12,13 @@ type sourceWithErr interface {
 }
 
 type Pipeline[T any] struct {
-	source  Source[T]
-	hooks   *Hooks[T]
-	ctx     context.Context
-	cancel  context.CancelFunc
-	pErr    atomic.Pointer[error]
-	done    bool
-	ctxNoop bool // true when ctx != nil but uncancelable (Background/TODO)
+	source       Source[T]
+	hooks        *Hooks[T]
+	ctx          context.Context
+	cancel       context.CancelFunc
+	pErr         atomic.Pointer[error]
+	finalizeOnce sync.Once
+	ctxNoop      bool // true when ctx != nil but uncancelable (Background/TODO)
 }
 
 func newPipeline[T any](src Source[T]) *Pipeline[T] {
@@ -30,8 +31,6 @@ func (p *Pipeline[T]) WithContext(ctx context.Context) *Pipeline[T] {
 	return p
 }
 
-// ctxActive reports whether the pipeline has a cancelable context
-// that requires per-element checks during iteration.
 func (p *Pipeline[T]) ctxActive() bool {
 	return p.ctx != nil && !p.ctxNoop
 }
@@ -97,7 +96,7 @@ func (p *Pipeline[T]) WithTimeout(d time.Duration) *Pipeline[T] {
 	ctx, cancel := context.WithTimeout(base, d)
 	p.ctx = ctx
 	p.cancel = cancel
-	p.ctxNoop = false // timeout context is always cancelable
+	p.ctxNoop = false
 	return p
 }
 
@@ -142,24 +141,21 @@ func (p *Pipeline[T]) Peek(fn func(T)) *Pipeline[T] {
 }
 
 func (p *Pipeline[T]) finalize() {
-	if p.done {
-		return
-	}
-	p.done = true
-
-	if p.Err() == nil {
-		if se, ok := p.source.(sourceWithErr); ok {
-			p.setErr(se.Err())
+	p.finalizeOnce.Do(func() {
+		if p.Err() == nil {
+			if se, ok := p.source.(sourceWithErr); ok {
+				p.setErr(se.Err())
+			}
 		}
-	}
 
-	if p.cancel != nil {
-		p.cancel()
-	}
-	if p.Err() != nil && p.hooks.Timeout > 0 {
-		p.hooks.fireTimeout(p.hooks.Timeout)
-	}
-	p.hooks.fireCompletion()
+		if p.cancel != nil {
+			p.cancel()
+		}
+		if p.Err() != nil && p.hooks.Timeout > 0 {
+			p.hooks.fireTimeout(p.hooks.Timeout)
+		}
+		p.hooks.fireCompletion()
+	})
 }
 
 func (p *Pipeline[T]) Collect() []T {

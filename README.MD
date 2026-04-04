@@ -1,5 +1,13 @@
 # GoSplice
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/lacolle87/gosplice)](https://goreportcard.com/report/github.com/lacolle87/gosplice)
+[![pkg.go.dev](https://pkg.go.dev/badge/github.com/lacolle87/gosplice)](https://pkg.go.dev/github.com/lacolle87/gosplice)
+[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](https://golang.org/doc/go1.23)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Last Commit](https://img.shields.io/github/last-commit/lacolle87/gosplice/master)](https://github.com/lacolle87/gosplice/commits/master)
+[![CI](https://github.com/lacolle87/gosplice/actions/workflows/ci.yml/badge.svg)](https://github.com/lacolle87/gosplice/actions/workflows/ci.yml)
+[![Go Coverage](https://img.shields.io/codecov/c/github/lacolle87/gosplice)](https://codecov.io/gh/lacolle87/gosplice)
+
 Go library for working with slices, streams, and data pipelines. Type-safe generics, lazy evaluation, parallel processing, configurable error handling, context-aware cancellation.
 
 Use the whole pipeline or pick the parts you need — standalone slice functions, streaming I/O, hooks, parallel workers. Each piece works independently.
