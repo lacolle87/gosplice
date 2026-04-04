@@ -5,7 +5,7 @@
 [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](https://golang.org/doc/go1.23)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Last Commit](https://img.shields.io/github/last-commit/lacolle87/gosplice/master)](https://github.com/lacolle87/gosplice/commits/master)
-[![CI](https://github.com/lacolle87/gosplice/actions/workflows/ci.yml/badge.svg)](https://github.com/lacolle87/gosplice/actions/workflows/ci.yml)
+[![CI](https://github.com/lacolle87/gosplice/actions/workflows/main.yaml/badge.svg)](https://github.com/lacolle87/gosplice/actions/workflows/main.yaml)
 [![Go Coverage](https://img.shields.io/codecov/c/github/lacolle87/gosplice)](https://codecov.io/gh/lacolle87/gosplice)
 
 Go library for working with slices, streams, and data pipelines. Type-safe generics, lazy evaluation, parallel processing, configurable error handling, context-aware cancellation.
