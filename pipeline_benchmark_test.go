@@ -3,6 +3,7 @@ package gosplice
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 )
 
@@ -330,4 +331,71 @@ func makeRange(n int) []int {
 		s[i] = i
 	}
 	return s
+}
+
+func BenchmarkPipeMapParallel_CheapFn_10k(b *testing.B) {
+	data := makeIterData(10_000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PipeMapParallel(FromSlice(data), runtime.NumCPU(), func(n int) int { return n * 2 }).Collect()
+	}
+}
+
+func BenchmarkPipeMapSequential_CheapFn_10k(b *testing.B) {
+	data := makeIterData(10_000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PipeMap(FromSlice(data), func(n int) int { return n * 2 }).Collect()
+	}
+}
+
+func BenchmarkPipeBatch_NoTimeout_10k(b *testing.B) {
+	data := makeIterData(10_000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PipeBatch(FromSlice(data), BatchConfig{Size: 100}).Collect()
+	}
+}
+
+func BenchmarkPipeMapErr_AllSuccess_10k(b *testing.B) {
+	data := makeIterData(10_000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PipeMapErr(FromSlice(data), func(n int) (int, error) { return n * 2, nil }).Collect()
+	}
+}
+
+func BenchmarkPartition_10k(b *testing.B) {
+	data := makeIterData(10_000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Partition(FromSlice(data), func(n int) bool { return n%2 == 0 })
+	}
+}
+
+func BenchmarkGroupBy_HighCard_10k(b *testing.B) {
+	data := makeIterData(10_000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		GroupBy(FromSlice(data), func(n int) int { return n })
+	}
+}
+
+func BenchmarkPipeWindow_Size10_Step1_10k(b *testing.B) {
+	data := makeIterData(10_000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		PipeWindow(FromSlice(data), 10, 1).Collect()
+	}
+}
+
+func BenchmarkCollect_FilterChain_10k(b *testing.B) {
+	data := makeIterData(10_000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		FromSlice(data).
+			Filter(func(n int) bool { return n%2 == 0 }).
+			Filter(func(n int) bool { return n > 1000 }).
+			Collect()
+	}
 }
