@@ -2,6 +2,8 @@ package gosplice
 
 import (
 	"context"
+	"io"
+	"strings"
 	"testing"
 )
 
@@ -106,4 +108,77 @@ func TestDrainSourceCtxFuncSourcePreCancelled(t *testing.T) {
 	if len(items) > 1 {
 		t.Logf("drained %d items before cancel", len(items))
 	}
+}
+
+type errorReader struct {
+	lines []string
+	idx   int
+}
+
+func (r *errorReader) Read(p []byte) (int, error) {
+	if r.idx >= len(r.lines) {
+		return 0, io.EOF
+	}
+	s := r.lines[r.idx] + "\n"
+	r.idx++
+	n := copy(p, s)
+	return n, nil
+}
+
+func TestFromReader_Basic(t *testing.T) {
+	r := strings.NewReader("hello\nworld\n")
+	result := FromReader(r).Collect()
+	assertSliceEqual(t, []string{"hello", "world"}, result)
+}
+
+func TestFromReader_Empty(t *testing.T) {
+	r := strings.NewReader("")
+	result := FromReader(r).Collect()
+	if len(result) != 0 {
+		t.Fatalf("expected empty, got %v", result)
+	}
+}
+
+func TestFromReader_Err(t *testing.T) {
+	// bufio.Scanner with a line that exceeds max token size
+	// Instead, test normal completion — Err() should be nil
+	r := strings.NewReader("a\nb\n")
+	p := FromReader(r)
+	_ = p.Collect()
+	if p.Err() != nil {
+		t.Fatalf("unexpected error: %v", p.Err())
+	}
+}
+
+func TestDrainSource_SizerPath(t *testing.T) {
+	// rangeSource implements Sizer — exercises the Sizer branch in drainSource
+	p := FromRange(0, 5)
+	// Use parallel which calls drainSource internally
+	result := PipeMapParallel(p, 2, func(n int) int { return n * 10 }).Collect()
+	assertSliceEqual(t, []int{0, 10, 20, 30, 40}, result)
+}
+
+func TestDrainSource_GenericFallback(t *testing.T) {
+	// funcSource has no Sizer — exercises the generic fallback in drainSource
+	i := 0
+	p := FromFunc(func() (int, bool) {
+		if i >= 3 {
+			return 0, false
+		}
+		i++
+		return i, true
+	})
+	result := PipeMapParallel(p, 2, func(n int) int { return n * 10 }).Collect()
+	assertSliceEqual(t, []int{10, 20, 30}, result)
+}
+
+func TestDrainSourceCtx_SizerNonSlice(t *testing.T) {
+	// rangeSource + cancelable ctx — exercises Sizer+ctx path in drainSourceCtx
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := PipeMapParallel(
+		FromRange(0, 5).WithContext(ctx), 2,
+		func(n int) int { return n * 2 },
+	).Collect()
+	assertSliceEqual(t, []int{0, 2, 4, 6, 8}, result)
 }

@@ -308,3 +308,64 @@ func TestWithMaxRetries(t *testing.T) {
 		t.Errorf("expected attempts between 2 and 6, got %d", got)
 	}
 }
+
+type failWriter struct {
+	n int // fail after n writes
+	c int
+}
+
+func (w *failWriter) Write(p []byte) (int, error) {
+	w.c++
+	if w.c > w.n {
+		return 0, errors.New("write failed")
+	}
+	return len(p), nil
+}
+
+func TestToWriter_Error(t *testing.T) {
+	w := &failWriter{n: 1}
+	err := ToWriter(FromSlice([]int{1, 2, 3, 4, 5}), w, func(n int) []byte {
+		return []byte(fmt.Sprintf("%d\n", n))
+	})
+	if err == nil {
+		t.Fatal("expected write error")
+	}
+}
+
+func TestToWriterString_Error(t *testing.T) {
+	w := &failWriter{n: 2}
+	err := ToWriterString(FromSlice([]int{1, 2, 3, 4, 5}), w, func(n int) string {
+		return fmt.Sprintf("%d\n", n)
+	})
+	if err == nil {
+		t.Fatal("expected write error")
+	}
+}
+
+func TestToWriter_Empty(t *testing.T) {
+	var buf bytes.Buffer
+	err := ToWriter(FromSlice([]int{}), &buf, func(n int) []byte {
+		return []byte(fmt.Sprintf("%d", n))
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatal("expected empty output")
+	}
+}
+
+func TestToWriterString_WithPipeline(t *testing.T) {
+	var buf bytes.Buffer
+	err := ToWriterString(
+		FromSlice([]int{1, 2, 3, 4, 5}).Filter(func(n int) bool { return n%2 == 0 }),
+		&buf,
+		func(n int) string { return fmt.Sprintf("%d,", n) },
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if buf.String() != "2,4," {
+		t.Fatalf("expected '2,4,', got %q", buf.String())
+	}
+}

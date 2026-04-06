@@ -1,6 +1,7 @@
 package gosplice
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -426,12 +427,6 @@ func TestCollectToPreallocated(t *testing.T) {
 	assertSliceEqual(t, []int{1, 2, 3}, FromSlice([]int{1, 2, 3}).CollectTo(buf))
 }
 
-func TestWriteTo(t *testing.T) {
-	var got []int
-	FromSlice([]int{1, 2, 3}).WriteTo(func(n int) { got = append(got, n) })
-	assertSliceEqual(t, []int{1, 2, 3}, got)
-}
-
 func TestElementHookFired(t *testing.T) {
 	count := int32(0)
 	FromSlice([]int{1, 2, 3}).
@@ -526,5 +521,227 @@ func TestPipelineForEachCount(t *testing.T) {
 		ForEach(func(n int) { count++ })
 	if count != 2 {
 		t.Errorf("expected 2, got %d", count)
+	}
+}
+
+func TestCollectTo_Nil(t *testing.T) {
+	result := FromSlice([]int{1, 2, 3}).CollectTo(nil)
+	assertSliceEqual(t, []int{1, 2, 3}, result)
+}
+
+func TestCollectTo_Reuse(t *testing.T) {
+	buf := make([]int, 0, 100)
+	result := FromSlice([]int{10, 20, 30}).CollectTo(buf)
+	assertSliceEqual(t, []int{10, 20, 30}, result)
+	if cap(result) != 100 {
+		t.Fatalf("expected reused capacity 100, got %d", cap(result))
+	}
+}
+
+func TestCollectTo_WithFilter(t *testing.T) {
+	buf := make([]int, 5, 10) // pre-filled, should be reset to [:0]
+	result := FromSlice([]int{1, 2, 3}).Filter(func(n int) bool { return n > 1 }).CollectTo(buf)
+	assertSliceEqual(t, []int{2, 3}, result)
+}
+
+func TestFirst_WithHook(t *testing.T) {
+	var count atomic.Int64
+	v, ok := FromSlice([]int{10, 20, 30}).
+		WithElementHook(CountElements[int](&count)).
+		First()
+	if !ok || v != 10 {
+		t.Fatalf("expected 10, got %d ok=%v", v, ok)
+	}
+	if count.Load() != 1 {
+		t.Fatalf("expected 1 hook call, got %d", count.Load())
+	}
+}
+
+func TestFirst_Empty(t *testing.T) {
+	_, ok := FromSlice([]int{}).First()
+	if ok {
+		t.Fatal("expected ok=false")
+	}
+}
+
+func TestAll_AllMatch(t *testing.T) {
+	if !FromSlice([]int{2, 4, 6}).All(func(n int) bool { return n%2 == 0 }) {
+		t.Fatal("expected true")
+	}
+}
+
+func TestAll_NoneMatch(t *testing.T) {
+	if FromSlice([]int{1, 3, 5}).All(func(n int) bool { return n%2 == 0 }) {
+		t.Fatal("expected false")
+	}
+}
+
+func TestAny_NoneMatch(t *testing.T) {
+	if FromSlice([]int{1, 3, 5}).Any(func(n int) bool { return n%2 == 0 }) {
+		t.Fatal("expected false")
+	}
+}
+
+func TestAny_Empty(t *testing.T) {
+	if FromSlice([]int{}).Any(func(n int) bool { return true }) {
+		t.Fatal("expected false for empty")
+	}
+}
+
+func TestAll_Empty(t *testing.T) {
+	if !FromSlice([]int{}).All(func(n int) bool { return false }) {
+		t.Fatal("expected true for empty (vacuous truth)")
+	}
+}
+
+func TestCount_NonSliceSource(t *testing.T) {
+	ch := make(chan int, 3)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	close(ch)
+	n := FromChannel(ch).Count()
+	if n != 3 {
+		t.Fatalf("expected 3, got %d", n)
+	}
+}
+
+func TestCount_WithFilter(t *testing.T) {
+	n := FromSlice([]int{1, 2, 3, 4, 5}).Filter(func(n int) bool { return n > 3 }).Count()
+	if n != 2 {
+		t.Fatalf("expected 2, got %d", n)
+	}
+}
+
+func TestCount_WithCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := FromSlice([]int{1, 2, 3}).WithContext(ctx).Count()
+	if n != 3 {
+		t.Fatalf("expected 3, got %d", n)
+	}
+}
+
+func TestFilterCollectAll_NonSlice(t *testing.T) {
+	// Filter on channel source — collectAll returns nil, falls back to drain
+	ch := make(chan int, 3)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	close(ch)
+	result := FromChannel(ch).Filter(func(n int) bool { return n > 1 }).Collect()
+	assertSliceEqual(t, []int{2, 3}, result)
+}
+
+func TestMapCollectAll_NonSlice(t *testing.T) {
+	ch := make(chan int, 3)
+	ch <- 10
+	ch <- 20
+	close(ch)
+	result := PipeMap(FromChannel(ch), func(n int) int { return n / 10 }).Collect()
+	assertSliceEqual(t, []int{1, 2}, result)
+}
+
+func TestChunkCollectAll_NonSlice(t *testing.T) {
+	ch := make(chan int, 4)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	ch <- 4
+	close(ch)
+	result := PipeChunk(FromChannel(ch), 2).Collect()
+	if len(result) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(result))
+	}
+}
+
+func TestWindowCollectAll_NonSlice(t *testing.T) {
+	ch := make(chan int, 5)
+	for i := 1; i <= 5; i++ {
+		ch <- i
+	}
+	close(ch)
+	result := PipeWindow(FromChannel(ch), 3, 1).Collect()
+	if len(result) != 3 {
+		t.Fatalf("expected 3 windows, got %d", len(result))
+	}
+}
+
+func TestWindowCollectAll_Slice_SmallData(t *testing.T) {
+	// n < size — exercises the fast-path partial branch
+	result := PipeWindow(FromSlice([]int{1}), 5, 1).Collect()
+	if len(result) != 1 {
+		t.Fatalf("expected 1 partial window, got %d", len(result))
+	}
+	assertSliceEqual(t, []int{1}, result[0])
+}
+
+func TestChunkCollectAll_Slice_Empty(t *testing.T) {
+	result := PipeChunk(FromSlice([]int{}), 3).Collect()
+	if len(result) != 0 {
+		t.Fatal("expected empty")
+	}
+}
+
+func TestSetErr_Nil(t *testing.T) {
+	p := FromSlice([]int{1})
+	p.setErr(nil)
+	if p.Err() != nil {
+		t.Fatal("setErr(nil) should be no-op")
+	}
+}
+
+func TestSetErr_OnlyFirst(t *testing.T) {
+	p := FromSlice([]int{1})
+	p.setErr(errors.New("first"))
+	p.setErr(errors.New("second"))
+	if p.Err().Error() != "first" {
+		t.Fatalf("expected 'first', got %v", p.Err())
+	}
+}
+
+func TestReduce_CtxActive(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	total := FromSlice([]int{1, 2, 3}).WithContext(ctx).Reduce(0, func(a, b int) int { return a + b })
+	if total != 6 {
+		t.Fatalf("expected 6, got %d", total)
+	}
+}
+
+func TestReduce_WithHooks(t *testing.T) {
+	var count atomic.Int64
+	total := FromSlice([]int{1, 2, 3}).
+		WithElementHook(CountElements[int](&count)).
+		Reduce(0, func(a, b int) int { return a + b })
+	if total != 6 {
+		t.Fatalf("expected 6, got %d", total)
+	}
+	if count.Load() != 3 {
+		t.Fatalf("expected 3, got %d", count.Load())
+	}
+}
+
+func TestReduce_NonSlice(t *testing.T) {
+	ch := make(chan int, 3)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	close(ch)
+	total := FromChannel(ch).Reduce(0, func(a, b int) int { return a + b })
+	if total != 6 {
+		t.Fatalf("expected 6, got %d", total)
+	}
+}
+
+func TestMapCollectAll_WithHooks(t *testing.T) {
+	var count atomic.Int64
+	result := PipeMap(
+		FromSlice([]int{1, 2, 3}).WithElementHook(CountElements[int](&count)),
+		func(n int) int { return n * 2 },
+	).Collect()
+	assertSliceEqual(t, []int{2, 4, 6}, result)
+	if count.Load() != 3 {
+		t.Fatalf("expected 3, got %d", count.Load())
 	}
 }

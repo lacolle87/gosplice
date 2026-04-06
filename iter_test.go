@@ -1,6 +1,7 @@
 package gosplice
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 )
@@ -589,5 +590,94 @@ func BenchmarkCollect_DrainFallback_10k(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		FromSlice(data).WithElementHook(func(int) {}).Collect()
+	}
+}
+
+func TestDrain_CtxActive_WithHooks_SliceSource(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var count atomic.Int64
+	result := FromSlice([]int{1, 2, 3, 4, 5}).
+		WithContext(ctx).
+		WithElementHook(CountElements[int](&count)).
+		Collect()
+	assertSliceEqual(t, []int{1, 2, 3, 4, 5}, result)
+	if count.Load() != 5 {
+		t.Fatalf("expected 5 hooks, got %d", count.Load())
+	}
+}
+
+func TestFold_CtxActive_WithHooks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var count atomic.Int64
+	total := FromSlice([]int{1, 2, 3}).
+		WithContext(ctx).
+		WithElementHook(CountElements[int](&count)).
+		Reduce(0, func(a, b int) int { return a + b })
+	if total != 6 {
+		t.Fatalf("expected 6, got %d", total)
+	}
+	if count.Load() != 3 {
+		t.Fatalf("expected 3 hooks, got %d", count.Load())
+	}
+}
+
+func TestFoldWhile_CtxActive_WithHooks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var count atomic.Int64
+	found := FromSlice([]int{1, 2, 3, 4, 5}).
+		WithContext(ctx).
+		WithElementHook(CountElements[int](&count)).
+		Any(func(n int) bool { return n == 3 })
+	if !found {
+		t.Fatal("expected true")
+	}
+	if count.Load() != 3 {
+		t.Fatalf("expected 3 hooks, got %d", count.Load())
+	}
+}
+
+func TestDrain_CtxActive_NoHooks_GenericSource(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan int, 3)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	close(ch)
+	var sum int
+	FromChannel(ch).WithContext(ctx).ForEach(func(n int) { sum += n })
+	if sum != 6 {
+		t.Fatalf("expected 6, got %d", sum)
+	}
+}
+
+func TestFold_CtxActive_NoHooks_GenericSource(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan int, 3)
+	ch <- 10
+	ch <- 20
+	ch <- 30
+	close(ch)
+	total := FromChannel(ch).WithContext(ctx).Reduce(0, func(a, b int) int { return a + b })
+	if total != 60 {
+		t.Fatalf("expected 60, got %d", total)
+	}
+}
+
+func TestFoldWhile_CtxActive_NoHooks_GenericSource(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan int, 5)
+	for i := 1; i <= 5; i++ {
+		ch <- i
+	}
+	close(ch)
+	found := FromChannel(ch).WithContext(ctx).Any(func(n int) bool { return n == 3 })
+	if !found {
+		t.Fatal("expected true")
 	}
 }

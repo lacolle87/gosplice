@@ -144,65 +144,114 @@ gs.Zip(names, scores)                // pairs of (name, score)
 
 Lazy, composable chains of operations. Nothing runs until you call a terminal.
 
+### Lazy evaluation
+
+All pipeline operations (Filter, Take, Skip, Peek, PipeMap, etc.) are **lazy** — they only describe what to do. No data is processed until a **terminal** is called. This means you can build a complex pipeline and nothing happens until `Collect()`, `ForEach()`, `Reduce()`, or another terminal triggers iteration.
+
+```go
+// Nothing happens here — just building a description
+p := gs.FromSlice(data).
+    Filter(func(n int) bool { return n > 0 }).
+    Take(10)
+
+// NOW it runs: iterates, filters, and stops after 10 matches
+result := p.Collect()
+```
+
+This is important for understanding hooks: `WithElementHook` fires **during terminal execution**, not when you attach it. If you need side effects at a specific point in the pipeline chain, use `Peek`.
+
 ### Sources
 
-```go
-gs.FromSlice(data)                          // in-memory slice
-gs.FromChannel(ch)                          // Go channel (streaming)
-gs.FromChannelCtx(ctx, ch)                  // context-aware channel read
-gs.FromReader(file)                         // io.Reader, line by line
-gs.FromFunc(func() (T, bool) {...})         // custom generator
-gs.FromRange(0, 1000)                       // integer range
-```
+| Function | Description | Use when |
+|---|---|---|
+| `FromSlice(data)` | In-memory slice | You have all data upfront |
+| `FromChannel(ch)` | Go channel | Streaming from a goroutine producer |
+| `FromChannelCtx(ctx, ch)` | Context-aware channel | Streaming with cancellation support |
+| `FromReader(r)` | `io.Reader`, line by line | Reading files, HTTP bodies |
+| `FromFunc(fn)` | Custom generator `func() (T, bool)` | Computed/infinite sequences |
+| `FromRange(start, end)` | Integer range `[start, end)` | Numeric sequences |
 
-### Operations
+### Operations (lazy, chainable)
 
-Chainable methods (same type):
+These are methods on `*Pipeline[T]` — they return a new pipeline without executing anything.
 
-```go
-pipeline.Filter(func(r Record) bool { return r.Active })
-pipeline.Take(100)      // first N elements
-pipeline.Skip(10)       // skip first N
-pipeline.Peek(func(r Record) { log.Println(r) })  // observe without consuming
-```
+| Operation | Description | Use when |
+|---|---|---|
+| `Filter(fn)` | Keep elements where `fn` returns true | Selecting a subset |
+| `Take(n)` | Stop after first `n` elements | Limiting output, pagination |
+| `Skip(n)` | Discard first `n` elements | Skipping headers, offset |
+| `Peek(fn)` | Call `fn` on each element, pass it through unchanged | Logging, debugging, side effects at a specific pipeline stage |
 
-Free functions (can change type):
+### Peek vs Hooks
 
-```go
-gs.PipeMap(p, func(r Record) string { return r.Name })
-gs.PipeMapErr(p, func(r Record) (Output, error) { return transform(r) })
-gs.PipeFlatMap(p, func(r Record) []Tag { return r.Tags })
-gs.PipeDistinct(p)           // remove duplicates (comparable types)
-gs.PipeChunk(p, 100)         // group into fixed-size batches
-gs.PipeWindow(p, 5, 1)       // sliding window (size=5, step=1)
-```
+This is a common source of confusion. Both `Peek` and `WithElementHook` let you observe elements, but they work differently and serve different purposes.
 
-Type-changing operations are free functions because Go generics don't allow methods to introduce new type parameters.
-
-### Terminals
-
-Terminals trigger execution:
+**Peek** is a pipeline stage. It runs **inline** at the point where you insert it in the chain, sees only elements that reach that stage, and respects downstream operations like `Take`.
 
 ```go
-results := pipeline.Collect()                // []T
-results := pipeline.CollectTo(existingBuf)   // reuse a buffer
-pipeline.ForEach(func(r Record) { process(r) })
-pipeline.WriteTo(func(r Record) { db.Insert(r) })
-
-count := pipeline.Count()
-first, ok := pipeline.First()
-hasAny := pipeline.Any(func(r Record) bool { return r.Priority == "high" })
-allOk := pipeline.All(func(r Record) bool { return r.Valid })
-
-sum := pipeline.Reduce(0, func(acc int, r Record) int { return acc + r.Value })
-
-// Cross-type reduce (different accumulator and element types)
-total := gs.PipeReduce(pipeline, 0.0, func(sum float64, o Order) float64 {
-    return sum + o.Price
-})
+// Peek runs between Filter and Take — only sees filtered elements
+gs.FromSlice(data).
+    Filter(func(n int) bool { return n > 0 }).
+    Peek(func(n int) { log.Println("passing:", n) }). // ← runs here in the chain
+    Take(5).
+    Collect()
 ```
+
+**WithElementHook** is an observability callback. It fires **inside the iteration loop** during terminal execution, on every element that reaches the drain/fold. It always fires **after** all pipeline stages have been applied. Hooks are designed for metrics, counters, and monitoring not for controlling pipeline logic.
+
+```go
+var count atomic.Int64
+
+// Hook fires during Collect(), on elements that passed all stages
+gs.FromSlice(data).
+    WithElementHook(gs.CountElements[int](&count)).
+    Filter(func(n int) bool { return n > 0 }).
+    Collect()
+```
+
+**When to use which:**
+
+| Goal | Use |
+|---|---|
+| Log/debug at a specific stage in the chain | `Peek` |
+| Count processed elements for metrics | `WithElementHook` + `CountElements` |
+| Observe elements between two transformations | `Peek` |
+| Fire a callback on every element reaching the terminal | `WithElementHook` |
+| Side effects that must happen at a known pipeline position | `Peek` |
+| Global observability (counters, error rates, latency) | Hooks |
+
+### Type-changing operations (free functions)
+
+These are free functions because Go generics don't allow methods to introduce new type parameters.
+
+| Function | Description | Use when |
+|---|---|---|
+| `PipeMap(p, fn)` | Transform `T → U` | Changing element type |
+| `PipeMapErr(p, fn)` | Transform `T → (U, error)` with error handling | Fallible transformations |
+| `PipeFlatMap(p, fn)` | Transform `T → []U`, flatten results | One-to-many expansion |
+| `PipeDistinct(p)` | Remove duplicates (comparable types) | Deduplication |
+| `PipeChunk(p, size)` | Group into fixed-size `[]T` batches | Bulk processing |
+| `PipeWindow(p, size, step)` | Sliding window of `size` with `step` | Moving averages, rolling stats |
+| `PipeReduce(p, init, fn)` | Cross-type reduce `T → U` | Aggregation with different result type |
+
+### Terminals (trigger execution)
+
+Terminals consume the pipeline. After a terminal call, the pipeline is finalized and should not be reused.
+
+| Terminal | Returns | Description |
+|---|---|---|
+| `Collect()` | `[]T` | Collect all elements into a slice |
+| `CollectTo(buf)` | `[]T` | Collect into an existing buffer (reuse allocation) |
+| `ForEach(fn)` | — | Call `fn` on each element |
+| `Count()` | `int` | Count elements |
+| `First()` | `(T, bool)` | First element, if any |
+| `Reduce(init, fn)` | `T` | Fold all elements (same type) |
+| `Any(pred)` | `bool` | True if any element matches (short-circuits) |
+| `All(pred)` | `bool` | True if all elements match (short-circuits) |
 
 ### Aggregations
+
+Free functions that consume a pipeline and return aggregated results.
 
 ```go
 groups := gs.GroupBy(pipeline, func(u User) string { return u.Department })
@@ -277,6 +326,8 @@ if err := p.Err(); err != nil {
 }
 ```
 
+**Important:** `WithContext` replaces the pipeline's context entirely. If a previous `WithTimeout` was set, calling `WithContext` cancels the old timeout and replaces it with the new context. The pipeline will not cancel the externally provided context — that responsibility stays with the caller.
+
 ### WithTimeout
 
 Creates a deadline-scoped pipeline. Fires `TimeoutHook` on expiration.
@@ -292,6 +343,16 @@ results := p.Collect()
 if errors.Is(p.Err(), context.DeadlineExceeded) {
     // partial results are still available
 }
+```
+
+**Ordering rule:** if you need both an external context and a timeout, call `WithContext` first, then `WithTimeout`. `WithTimeout` wraps the current context with a deadline, so the resulting context inherits both the parent's cancellation and the timeout.
+
+```go
+// ✅ Correct: timeout wraps the parent context
+p := gs.FromChannel(ch).WithContext(parentCtx).WithTimeout(5 * time.Second)
+
+// ❌ Wrong: WithContext after WithTimeout replaces the timeout context
+p := gs.FromChannel(ch).WithTimeout(5 * time.Second).WithContext(parentCtx)
 ```
 
 ### FromChannelCtx
@@ -418,13 +479,30 @@ pipeline.
     })
 ```
 
-Multiple hooks of the same type compose — they fire in registration order. Hooks work with all terminals: Collect, Reduce, ForEach, Count, First, Any, All, ToChannel, WriteTo.
+Multiple hooks of the same type compose — they fire in registration order. Hooks work with all terminals: Collect, Reduce, ForEach, Count, First, Any, All, ToChannel.
+
+| Hook | Fires when | Typical use |
+|---|---|---|
+| `WithElementHook(fn)` | Each element reaches the terminal's iteration loop | Counters, metrics |
+| `WithErrorHook(fn)` | `PipeMapErr` encounters an error (no handler set) | Error logging, collection |
+| `WithBatchHook(fn)` | A batch is emitted by `PipeBatch` | Bulk inserts, batch logging |
+| `WithCompletionHook(fn)` | Pipeline finalization (after terminal completes) | Cleanup, final metrics report |
+| `WithTimeoutHook(fn)` | Pipeline finishes with an error and `Timeout > 0` | Timeout alerting |
+
+**Important:** hooks must be configured before calling any terminal. Adding or modifying hooks after iteration has started is not supported and may cause data races. Hooks are not synchronized — they rely on the guarantee that pipeline configuration is complete before execution begins.
 
 ---
 
 ## Parallel processing
 
 Parallel operations split work across goroutines. Order is preserved.
+
+| Function | Memory model | Use when |
+|---|---|---|
+| `PipeMapParallel(p, workers, fn)` | Drains source into a slice, then splits across workers | Finite data + expensive per-element work |
+| `PipeFilterParallel(p, workers, fn)` | Same — drain first, parallel predicate evaluation | Finite data + expensive predicate |
+| `PipeMapParallelErr(p, workers, fn)` | Same — drain first, parallel with error tracking | Finite data + fallible transformations |
+| `PipeMapParallelStream(p, workers, buf, fn)` | Streaming — bounded memory, reads from source on the fly | Channels, readers, infinite/large sources |
 
 ```go
 // Parallel map — each worker processes a contiguous batch
@@ -443,6 +521,10 @@ results := gs.PipeMapParallelStream(pipeline, 4, 256, transform).Collect()
 ```
 
 Parallel operations make sense when the per-element work is expensive (API calls, heavy computation). For cheap operations like arithmetic, the sequential pipeline is faster.
+
+**Memory note:** `PipeMapParallel`, `PipeFilterParallel`, and `PipeMapParallelErr` drain the entire source into memory before parallelizing. For unbounded or very large sources (millions of elements), use `PipeMapParallelStream` instead — it reads from the source incrementally and uses bounded buffer memory.
+
+**Retry note:** `PipeMapParallelErr` does not support retries. If the transformation function returns an error, the element is passed to error hooks and skipped. For retry semantics, use the sequential `PipeMapErr` with `WithErrorHandler` and `WithMaxRetries`. Implementing per-element retries in a parallel fan-out would require per-slot retry loops with backoff, which adds significant complexity for limited benefit.
 
 ## Batching
 
@@ -567,10 +649,10 @@ Focused purely on the hooks system. Processes 200 records with bad data through 
 ```go
 // Timeout hook — pipeline stops after deadline
 gs.PipeMapErr(
-gs.FromSlice(data).
-WithTimeout(50 * time.Millisecond).
-WithTimeoutHook(func(d time.Duration) { fmt.Printf("timed out after %v\n", d) }),
-slowTransform,
+    gs.FromSlice(data).
+        WithTimeout(50 * time.Millisecond).
+        WithTimeoutHook(func(d time.Duration) { fmt.Printf("timed out after %v\n", d) }),
+    slowTransform,
 ).Collect()
 ```
 

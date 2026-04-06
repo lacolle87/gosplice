@@ -26,6 +26,10 @@ func newPipeline[T any](src Source[T]) *Pipeline[T] {
 }
 
 func (p *Pipeline[T]) WithContext(ctx context.Context) *Pipeline[T] {
+	if p.cancel != nil {
+		p.cancel()
+		p.cancel = nil
+	}
 	p.ctx = ctx
 	p.ctxNoop = ctx != nil && ctx.Done() == nil
 	return p
@@ -257,8 +261,4 @@ func (p *Pipeline[T]) All(pred func(T) bool) bool {
 		}
 		return false, true
 	})
-}
-
-func (p *Pipeline[T]) WriteTo(fn func(T)) {
-	p.ForEach(fn)
 }

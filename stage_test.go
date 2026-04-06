@@ -1,6 +1,7 @@
 package gosplice
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -247,5 +248,162 @@ func TestPeekSideEffect(t *testing.T) {
 		FromSlice([]int{1, 2, 3}).Peek(func(n int) { sum += n }).Collect())
 	if sum != 6 {
 		t.Errorf("expected 6, got %d", sum)
+	}
+}
+
+func TestPeekSizeHint_NoSizer(t *testing.T) {
+	// funcSource doesn't implement Sizer; peek should return -1
+	i := 0
+	p := FromFunc(func() (int, bool) {
+		i++
+		if i > 3 {
+			return 0, false
+		}
+		return i, true
+	}).Peek(func(int) {})
+	result := p.Collect()
+	if len(result) != 3 {
+		t.Fatalf("expected 3, got %d", len(result))
+	}
+}
+
+func TestTakeSizeHint_Exhausted(t *testing.T) {
+	p := FromSlice([]int{1, 2, 3}).Take(0)
+	result := p.Collect()
+	if len(result) != 0 {
+		t.Fatal("expected empty")
+	}
+}
+
+func TestTakeSizeHint_InnerSmaller(t *testing.T) {
+	// Take(100) from 3 elements — SizeHint should return 3
+	result := FromSlice([]int{1, 2, 3}).Take(100).Collect()
+	assertSliceEqual(t, []int{1, 2, 3}, result)
+}
+
+func TestSkip_ExhaustsSource(t *testing.T) {
+	result := FromSlice([]int{1, 2, 3}).Skip(10).Collect()
+	if len(result) != 0 {
+		t.Fatal("expected empty")
+	}
+}
+
+func TestWindowSource_PartialFirstWindow(t *testing.T) {
+	// Source smaller than window size — should return one partial window
+	result := PipeWindow(FromSlice([]int{1, 2}), 5, 1).Collect()
+	if len(result) != 1 {
+		t.Fatalf("expected 1 partial window, got %d", len(result))
+	}
+	assertSliceEqual(t, []int{1, 2}, result[0])
+}
+
+func TestWindowSource_EmptySource(t *testing.T) {
+	result := PipeWindow(FromSlice([]int{}), 3, 1).Collect()
+	if len(result) != 0 {
+		t.Fatal("expected empty")
+	}
+}
+
+func TestWindowSource_StepGreaterThanOne(t *testing.T) {
+	result := PipeWindow(FromSlice([]int{1, 2, 3, 4, 5, 6}), 3, 2).Collect()
+	// windows: [1,2,3], [3,4,5]
+	if len(result) != 2 {
+		t.Fatalf("expected 2, got %d", len(result))
+	}
+	assertSliceEqual(t, []int{1, 2, 3}, result[0])
+	assertSliceEqual(t, []int{3, 4, 5}, result[1])
+}
+
+func TestWindowSource_StepZero(t *testing.T) {
+	// step < 1 should be forced to 1
+	result := PipeWindow(FromSlice([]int{1, 2, 3}), 2, 0).Collect()
+	// windows: [1,2], [2,3]
+	if len(result) != 2 {
+		t.Fatalf("expected 2, got %d", len(result))
+	}
+}
+
+func TestMapErrSource_AbortStopsPipeline(t *testing.T) {
+	result := PipeMapErr(
+		FromSlice([]int{1, 2, 3, 4, 5}).
+			WithErrorHandler(AbortOnError[int]()),
+		func(n int) (int, error) {
+			if n == 3 {
+				return 0, errors.New("fail")
+			}
+			return n * 10, nil
+		},
+	).Collect()
+	// Should abort at element 3, so we get [10, 20]
+	assertSliceEqual(t, []int{10, 20}, result)
+}
+
+func TestMapErrSource_NoErrHandler_NoHook_Skips(t *testing.T) {
+	// No handler, no hooks — errors are silently skipped
+	result := PipeMapErr(
+		FromSlice([]int{1, 2, 3}),
+		func(n int) (int, error) {
+			if n == 2 {
+				return 0, errors.New("fail")
+			}
+			return n * 10, nil
+		},
+	).Collect()
+	assertSliceEqual(t, []int{10, 30}, result)
+}
+
+func TestMapErrSource_WithElementHook(t *testing.T) {
+	var count atomic.Int64
+	result := PipeMapErr(
+		FromSlice([]int{1, 2, 3}).
+			WithElementHook(CountElements[int](&count)),
+		func(n int) (int, error) { return n * 2, nil },
+	).Collect()
+	assertSliceEqual(t, []int{2, 4, 6}, result)
+	if count.Load() != 3 {
+		t.Fatalf("expected 3 hooks, got %d", count.Load())
+	}
+}
+
+func TestFlatMap_WithHooks(t *testing.T) {
+	var count atomic.Int64
+	result := PipeFlatMap(
+		FromSlice([]int{1, 2}).
+			WithElementHook(CountElements[int](&count)),
+		func(n int) []int { return []int{n, n * 10} },
+	).Collect()
+	assertSliceEqual(t, []int{1, 10, 2, 20}, result)
+	if count.Load() != 2 {
+		t.Fatalf("expected 2 hooks, got %d", count.Load())
+	}
+}
+
+func TestChunk_WithHooks(t *testing.T) {
+	var count atomic.Int64
+	result := PipeChunk(
+		FromSlice([]int{1, 2, 3, 4, 5}).
+			WithElementHook(CountElements[int](&count)),
+		2,
+	).Collect()
+	if len(result) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(result))
+	}
+	if count.Load() != 5 {
+		t.Fatalf("expected 5 hooks, got %d", count.Load())
+	}
+}
+
+func TestWindow_WithHooks(t *testing.T) {
+	var count atomic.Int64
+	result := PipeWindow(
+		FromSlice([]int{1, 2, 3, 4, 5}).
+			WithElementHook(CountElements[int](&count)),
+		3, 1,
+	).Collect()
+	if len(result) != 3 {
+		t.Fatalf("expected 3 windows, got %d", len(result))
+	}
+	if count.Load() != 5 {
+		t.Fatalf("expected 5 hooks, got %d", count.Load())
 	}
 }

@@ -344,3 +344,47 @@ func TestWithContextNil(t *testing.T) {
 	assertSliceEqual(t, []int{1, 2, 3},
 		FromSlice([]int{1, 2, 3}).WithContext(nil).Collect())
 }
+
+func TestHooksHasError_OnlyHooks(t *testing.T) {
+	h := newHooks[int]()
+	if h.hasError() {
+		t.Fatal("empty hooks should return false")
+	}
+	h.OnError = append(h.OnError, func(err error, v int) {})
+	if !h.hasError() {
+		t.Fatal("with error hook should return true")
+	}
+}
+
+func TestHooksHandleError_FallbackToHooks(t *testing.T) {
+	var called bool
+	h := newHooks[int]()
+	h.OnError = append(h.OnError, func(err error, v int) { called = true })
+	action := h.handleError(errors.New("test"), 42, 1)
+	if action != Skip {
+		t.Fatalf("expected Skip, got %d", action)
+	}
+	if !called {
+		t.Fatal("hook should have been called")
+	}
+}
+
+func TestRetryHandler_ZeroBackoff(t *testing.T) {
+	h := RetryHandler[int](3, 0)
+	if h(errors.New("e"), 1, 1) != Retry {
+		t.Fatal("attempt 1 should retry")
+	}
+	if h(errors.New("e"), 1, 3) != Skip {
+		t.Fatal("attempt 3 should skip")
+	}
+}
+
+func TestRetryThenAbort_Escalation(t *testing.T) {
+	h := RetryThenAbort[int](2, 0)
+	if h(errors.New("e"), 1, 1) != Retry {
+		t.Fatal("attempt 1 should retry")
+	}
+	if h(errors.New("e"), 1, 2) != Abort {
+		t.Fatal("attempt 2 should abort")
+	}
+}

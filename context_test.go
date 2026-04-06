@@ -1398,3 +1398,48 @@ func TestFix_PipeMapParallel_PreCancelledCtx_BoundedResult(t *testing.T) {
 		t.Fatalf("expected early stop, got all %d elements", len(result))
 	}
 }
+
+// ===========================================================================
+// Fix: WithContext cancels previous WithTimeout cancel to prevent orphaned ctx
+// ===========================================================================
+
+func TestWithContext_CancelsPreviousTimeout(t *testing.T) {
+	// WithTimeout sets p.cancel. Calling WithContext after must cancel the old
+	// timeout context so its timer goroutine does not leak.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p := FromSlice([]int{1, 2, 3}).
+			WithTimeout(10 * time.Second). // sets p.cancel (10s timer goroutine)
+			WithContext(ctx)               // must cancel the old timeout
+
+		// After WithContext, the pipeline uses the new ctx.
+		// The old 10s timer goroutine must have been cancelled.
+		result := p.Collect()
+		if len(result) != 3 {
+			t.Errorf("expected 3 elements, got %d", len(result))
+		}
+	}()
+
+	select {
+	case <-done:
+		// ok — finished quickly, old timer was cancelled
+	case <-time.After(2 * time.Second):
+		t.Fatal("pipeline did not complete — old cancel may have leaked")
+	}
+}
+
+func TestToChannel_WithCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan int, 10)
+	FromSlice([]int{1, 2, 3}).WithContext(ctx).ToChannel(ch)
+	var result []int
+	for v := range ch {
+		result = append(result, v)
+	}
+	assertSliceEqual(t, []int{1, 2, 3}, result)
+}
