@@ -33,6 +33,15 @@ func (s *filterSource[T]) collectAll() []T {
 	return nil
 }
 
+func (s *filterSource[T]) SizeHint() int {
+	if sizer, ok := s.inner.(Sizer); ok {
+		if hint := sizer.SizeHint(); hint >= 0 {
+			return hint
+		}
+	}
+	return -1
+}
+
 type takeSource[T any] struct {
 	inner Source[T]
 	n     int

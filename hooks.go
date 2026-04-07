@@ -10,11 +10,27 @@ const (
 	Abort                    // stop pipeline gracefully
 )
 
+// ElementHook is called for each element that reaches a terminal's iteration loop.
 type ElementHook[T any] func(T)
+
+// ErrorHook is called when PipeMapErr encounters an error and no ErrorHandler is set.
+// The element is always skipped after all error hooks fire.
 type ErrorHook[T any] func(error, T)
+
+// ErrorHandler decides the fate of a failed element: Skip, Retry, or Abort.
+// When set, ErrorHandler takes precedence over ErrorHook — hooks are not called.
+// The attempt parameter starts at 1 and increments on each Retry.
 type ErrorHandler[T any] func(err error, elem T, attempt int) ErrorAction
+
+// BatchHook is called when PipeBatch emits a complete batch.
 type BatchHook[T any] func([]T)
+
+// CompletionHook is called exactly once during pipeline finalization,
+// after the terminal operation completes or the pipeline is cancelled.
 type CompletionHook func()
+
+// TimeoutHook is called during finalization if the pipeline finished
+// with an error and Timeout > 0 was configured via WithTimeout.
 type TimeoutHook func(time.Duration)
 
 type Hooks[T any] struct {
@@ -30,22 +46,6 @@ type Hooks[T any] struct {
 
 func newHooks[T any]() *Hooks[T] {
 	return &Hooks[T]{MaxRetries: 3}
-}
-
-func (h *Hooks[T]) clone() *Hooks[T] {
-	if h == nil {
-		return newHooks[T]()
-	}
-	return &Hooks[T]{
-		OnElement:    append([]ElementHook[T]{}, h.OnElement...),
-		OnError:      append([]ErrorHook[T]{}, h.OnError...),
-		OnBatch:      append([]BatchHook[T]{}, h.OnBatch...),
-		OnCompletion: append([]CompletionHook{}, h.OnCompletion...),
-		OnTimeout:    append([]TimeoutHook{}, h.OnTimeout...),
-		ErrHandler:   h.ErrHandler,
-		Timeout:      h.Timeout,
-		MaxRetries:   h.MaxRetries,
-	}
 }
 
 func (h *Hooks[T]) hasElement() bool { return len(h.OnElement) > 0 }

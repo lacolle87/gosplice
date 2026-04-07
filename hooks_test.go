@@ -13,29 +13,6 @@ import (
 // Hooks internals
 // ===========================================================================
 
-func TestHooksClone(t *testing.T) {
-	h := newHooks[int]()
-	h.OnElement = append(h.OnElement, func(int) {})
-	h.OnError = append(h.OnError, func(error, int) {})
-	h.MaxRetries = 7
-	c := h.clone()
-	if len(c.OnElement) != 1 || c.MaxRetries != 7 {
-		t.Error("clone should copy fields")
-	}
-	c.OnElement = append(c.OnElement, func(int) {})
-	if len(h.OnElement) != 1 {
-		t.Error("clone mutation affected original")
-	}
-}
-
-func TestHooksCloneNil(t *testing.T) {
-	var h *Hooks[int]
-	c := h.clone()
-	if c == nil || c.MaxRetries != 3 {
-		t.Errorf("clone of nil: nil=%v MaxRetries=%d", c == nil, c.MaxRetries)
-	}
-}
-
 func TestHooksFireTimeout(t *testing.T) {
 	var fired time.Duration
 	h := newHooks[int]()
@@ -257,12 +234,13 @@ func TestMapErrHookOnlySkipsAndNotifies(t *testing.T) {
 }
 
 // ===========================================================================
-// Finalize safety (review #5)
+// Finalize safety
 // ===========================================================================
 
-// finalize() uses a plain bool p.done without synchronization.
-// Run with -race to detect the data race. The slow completion hook
-// widens the race window so multiple goroutines enter the body.
+// finalize() uses sync.Once (finalizeOnce) to guarantee that completion hooks
+// fire exactly once and cancel is called exactly once. This test originally
+// caught a race when finalize used a plain bool — now it verifies the fix.
+// Run with -race to confirm no regression.
 func TestFinalizeConcurrentSafe(t *testing.T) {
 	var completions atomic.Int32
 	p := FromSlice([]int{1, 2, 3, 4, 5}).
