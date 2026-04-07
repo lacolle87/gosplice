@@ -13,6 +13,9 @@ func PipeMap[T any, U any](p *Pipeline[T], fn func(T) U) *Pipeline[U] {
 	}
 }
 
+// PipeMapErr transforms T→U with error handling. On error: ErrorHandler decides
+// (Skip/Retry/Abort), or if only ErrorHooks are set, the element is skipped.
+// No handler + no hooks = silent skip.
 func PipeMapErr[T any, U any](p *Pipeline[T], fn func(T) (U, error)) *Pipeline[U] {
 	return &Pipeline[U]{
 		source: &mapErrSource[T, U]{
@@ -63,6 +66,8 @@ func PipeChunk[T any](p *Pipeline[T], size int) *Pipeline[[]T] {
 	}
 }
 
+// PipeWindow yields sliding windows of the given size.
+// Step controls overlap: step=1 → full overlap, step=size → no overlap (same as PipeChunk).
 func PipeWindow[T any](p *Pipeline[T], size, step int) *Pipeline[[]T] {
 	if step < 1 {
 		step = 1

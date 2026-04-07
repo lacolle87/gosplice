@@ -8,6 +8,7 @@ func Map[T any, U any](slice []T, f func(T) U) []U {
 	return result
 }
 
+// MapInPlace applies f to each element in place. Zero allocations.
 func MapInPlace[T any](slice []T, f func(T) T) {
 	for i, v := range slice {
 		slice[i] = f(v)
@@ -35,6 +36,7 @@ func Filter[T any](slice []T, f func(T) bool) []T {
 	return result
 }
 
+// FilterInPlace compacts the slice in place. Modifies and returns a sub-slice of the original.
 func FilterInPlace[T any](slice []T, f func(T) bool) []T {
 	n := 0
 	for _, v := range slice {

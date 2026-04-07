@@ -6,7 +6,9 @@ import (
 )
 
 type BatchConfig struct {
-	Size    int
+	Size int
+	// MaxWait emits a partial batch if no new element arrives within this duration.
+	// Zero means wait indefinitely for a full batch. Only useful with streaming sources.
 	MaxWait time.Duration
 }
 

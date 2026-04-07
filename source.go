@@ -7,6 +7,9 @@ import (
 	"sync"
 )
 
+// Source is the pull-based iterator at the heart of every pipeline.
+// Implementations must be safe for sequential use (not concurrent).
+// Return (value, true) for each element, (zero, false) when exhausted.
 type Source[T any] interface {
 	Next() (T, bool)
 }
@@ -110,6 +113,8 @@ func (s *readerSource) Next() (string, bool) {
 
 func (s *readerSource) Err() error { return s.err }
 
+// FromReader creates a pipeline that yields one string per line (splits on \n).
+// Check pipeline.Err() after the terminal call for I/O errors.
 func FromReader(r io.Reader) *Pipeline[string] {
 	return newPipeline[string](&readerSource{scanner: bufio.NewScanner(r)})
 }

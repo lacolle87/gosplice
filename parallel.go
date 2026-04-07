@@ -23,6 +23,8 @@ func parallelResult[T any, U any](p *Pipeline[T], data []U, cancelled bool) *Pip
 	return r
 }
 
+// PipeMapParallel drains the source into memory first, then splits across workers.
+// Order is preserved. For unbounded sources use PipeMapParallelStream.
 func PipeMapParallel[T any, U any](p *Pipeline[T], workers int, fn func(T) U) *Pipeline[U] {
 	items, cancelled := drainSourceCtx(p.source, p.ctx)
 	n := len(items)
@@ -142,6 +144,8 @@ func PipeMapParallelErr[T any, U any](p *Pipeline[T], workers int, fn func(T) (U
 	return parallelResult[T, U](p, out, cancelled)
 }
 
+// PipeMapParallelStream reads from the source incrementally with bounded buffer memory.
+// Order is preserved. Use for channels, readers, or large/infinite sources.
 func PipeMapParallelStream[T any, U any](p *Pipeline[T], workers int, bufSize int, fn func(T) U) *Pipeline[U] {
 	src := p.source
 	hooks := p.hooks

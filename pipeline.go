@@ -59,6 +59,8 @@ func (p *Pipeline[T]) setErr(err error) {
 	p.pErr.CompareAndSwap(nil, e)
 }
 
+// Err returns the first error that occurred during pipeline execution.
+// Follows the bufio.Scanner pattern: call after any terminal.
 func (p *Pipeline[T]) Err() error {
 	if ptr := p.pErr.Load(); ptr != nil {
 		return *ptr
@@ -101,6 +103,8 @@ func (p *Pipeline[T]) WithTimeoutHook(fn TimeoutHook) *Pipeline[T] {
 	return p
 }
 
+// WithTimeout wraps the current context with a deadline.
+// Call WithContext first if you need both: WithContext(parent).WithTimeout(5s).
 func (p *Pipeline[T]) WithTimeout(d time.Duration) *Pipeline[T] {
 	p.hooks.Timeout = d
 	base := p.ctx
@@ -191,6 +195,7 @@ func (p *Pipeline[T]) Collect() []T {
 	return result
 }
 
+// CollectTo appends results into dst, reusing its backing array to avoid allocation.
 func (p *Pipeline[T]) CollectTo(dst []T) []T {
 	defer p.finalize()
 	var result []T
