@@ -11,6 +11,16 @@ type sourceWithErr interface {
 	Err() error
 }
 
+// Pipeline is a lazy, composable data processing chain.
+//
+// A Pipeline is not safe for concurrent use from multiple goroutines.
+// All configuration (WithContext, WithElementHook, Filter, etc.) must
+// complete before calling any terminal (Collect, ForEach, Reduce, etc.).
+//
+// Terminals use sync.Once internally so calling finalize multiple times
+// (e.g. Collect then ForEach on the same pipeline) is safe — completion
+// hooks fire exactly once and cancel is idempotent. However, the source
+// will already be exhausted after the first terminal call.
 type Pipeline[T any] struct {
 	source       Source[T]
 	hooks        *Hooks[T]

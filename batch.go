@@ -56,6 +56,11 @@ func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig
 		timer := time.NewTimer(cfg.MaxWait)
 		defer timer.Stop()
 
+		loopCtx := ctx
+		if loopCtx == nil {
+			loopCtx = context.Background()
+		}
+
 		itemCh := make(chan T)
 		go func() {
 			defer close(itemCh)
@@ -64,14 +69,10 @@ func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig
 				if !ok {
 					return
 				}
-				if ctx != nil {
-					select {
-					case itemCh <- v:
-					case <-ctx.Done():
-						return
-					}
-				} else {
-					itemCh <- v
+				select {
+				case itemCh <- v:
+				case <-loopCtx.Done():
+					return
 				}
 			}
 		}()
@@ -93,30 +94,11 @@ func pipeBatchWithTimeout[T any](src Source[T], hooks *Hooks[T], cfg BatchConfig
 			timer.Reset(cfg.MaxWait)
 		}
 
-		if ctx != nil {
-			for {
-				select {
-				case <-ctx.Done():
-					flush()
-					return
-				case v, ok := <-itemCh:
-					if !ok {
-						flush()
-						return
-					}
-					hooks.fireElement(v)
-					batch = append(batch, v)
-					if len(batch) >= cfg.Size {
-						flush()
-					}
-				case <-timer.C:
-					flush()
-				}
-			}
-		}
-
 		for {
 			select {
+			case <-loopCtx.Done():
+				flush()
+				return
 			case v, ok := <-itemCh:
 				if !ok {
 					flush()
